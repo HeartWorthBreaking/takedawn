@@ -120,6 +120,10 @@ an undistorted HUD, ultrawide, and a settings menu you can open mid-race.
 - HDR on Windows, Linux and the Steam Deck: the game's own light above white,
   which the console's output clipped. Lamps, sparks, the boost and the sun go
   past white. HUD and menus stay at paper white.
+- Frame pacing: Smooth keeps one finished frame queued, so a late frame
+  doesn't show twice. Default on the Steam Deck.
+- Potato mode: on a machine under 60 fps the race keeps real time from the
+  start instead of running in slow motion until the first crash.
 - Render scale from 1x (640x480, as on the console) to 4x (2560x1920).
   Android also has 1.5x.
 - The game's own 16:9 mode stretches the HUD by a third. The widescreen HUD
@@ -130,6 +134,8 @@ an undistorted HUD, ultrawide, and a settings menu you can open mid-race.
 - Ultrawide at 21:9 and 32:9: races fill the whole width and show more at the
   sides. Menus and films stay 16:9 in the middle.
 - 60 fps, locked to your display's refresh, also on 120 Hz screens.
+- Touch controls on Android: steering, gas, brake, boost and the menus. They
+  hide while a controller is in use.
 - Crash cameras can run at 60 fps instead of the console's 30, in races and in
   Crash mode.
 - Split screen can run at 60 fps and with music. The console runs it at 30
@@ -150,7 +156,8 @@ an undistorted HUD, ultrawide, and a settings menu you can open mid-race.
   away. Sliders turn the game's bloom and motion blur down or off.
 - A settings menu in the game's own style, with its fonts and buttons. Open it
   with Back and Start, F1, or TAKEDAWN SETTINGS in the game's Settings and
-  pause menus. The game pauses while it's open.
+  pause menus. The game pauses while it's open. It plays the game's own menu
+  sounds.
 - Button prompts for your controller: Xbox, PlayStation (DualShock and
   DualSense), Nintendo, Steam, or a neutral set that shows the button's
   position. They switch to whatever controller you're using.
@@ -159,11 +166,11 @@ an undistorted HUD, ultrawide, and a settings menu you can open mid-race.
   layout, and km/h.
 - Before each save the game keeps a copy of the old one, and you can restore
   an earlier save from the menu. Saves can be exported and imported, including
-  between platforms.
+  between platforms. A save from an original Xbox can be imported too.
 - A setup window that checks your disc image file by file. An interrupted
-  install never leaves you with a half-installed game. The setup can also
-  build the shaders before you first play (the box is ticked by default), so
-  the first races don't hitch.
+  install never leaves you with a half-installed game. The game data can go
+  in a folder of your choice. The first start builds all shaders, so the first
+  race doesn't hitch.
 - Advanced > Create bug report puts the logs, settings and a system summary in
   one zip, with your user name and home folder removed.
 - On desktop, Advanced > Check for updates tells you whether a newer version
