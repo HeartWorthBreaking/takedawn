@@ -117,6 +117,9 @@ an undistorted HUD, ultrawide, and a settings menu you can open mid-race.
 
 ## Highlights
 
+- HDR on Windows, Linux and the Steam Deck: the game's own light above white,
+  which the console's output clipped. Lamps, sparks, the boost and the sun go
+  past white. HUD and menus stay at paper white.
 - Render scale from 1x (640x480, as on the console) to 4x (2560x1920).
   Android also has 1.5x.
 - The game's own 16:9 mode stretches the HUD by a third. The widescreen HUD
