@@ -110,6 +110,14 @@ extern void sub_002FAAEF_gen(void);
 
 void sub_002FAAEF(void) { bo3_dsound_voice_done(sub_002FAAEF_gen); }
 
+/* A sound bank that did not load (BO-218, ../soundbank.c): the wave count
+ * of a dictionary that is no list is 0, not an endless walk. */
+#include "../soundbank.h"
+
+extern void sub_001F65A0_gen(void);
+
+void sub_001F65A0(void) { bo3_wave_dict_count(sub_001F65A0_gen); }
+
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
     /*

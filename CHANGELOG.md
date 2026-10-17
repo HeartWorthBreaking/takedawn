@@ -4,67 +4,39 @@ What changed in each release of Takedawn, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Major releases carry
 a codename, a song title from the game's soundtrack.
 
-## Unreleased
+## 0.2.0 "Hot Night Crash"
+
+Saves and settings from 0.1.1 carry over.
 
 ### Added
 
-- The setup window can put the game data in another folder: Change... next
-  to "Installs to", on Mac, Windows and Linux. The game finds it there at
-  every start and after updates. Default goes back to the usual folder. A
-  folder that already holds the data, moved there by hand, is checked in
-  place and used without the disc.
+- Bloom and Motion blur are sliders, 0 to 100%, 100% is the original.
+- HDR output on Windows, Linux and the Steam Deck (Graphics > HDR): peak, paper white, HUD brightness, shadows, highlights and gamma. The sun's disc fades from its centre. Macs show the row on an HDR display; not checked there.
+- Frame pacing: Automatic, Low latency, Smooth (Windows, Linux, Deck). Automatic is Smooth on the Deck.
+- A watchdog resets the frame timing after a long stall, a resume from sleep or a display change.
+- Potato mode (Graphics): the race keeps real time from its start on a machine under 60 fps. Off by default.
+- Import Xbox save... (Advanced), and `--import-save` on the command line.
+- Touch controls on Android: in a race, a stick for the left thumb and GAS, BRAKE, BOOST, BREAKER, LOOK and VIEW on the right; in menus, a d-pad, A, B, X, Y, LT and RT. They hide while a controller is in use. Settings on the Input page: Touch controls (Auto, Always, Off), opacity, size, Accelerate automatically. The settings menu works by touch.
+- The setup window can put the game data in another folder (Change...), on Mac, Windows and Linux.
+- Menu sounds in the settings menu, from the player's disc (Audio > Menu sounds).
+- Windows builds natively from Git Bash (d-b-c-e).
 
 ### Changed
 
-- The game ships a list of the shaders and pipelines it needs, and builds
-  them all before the first picture. The screen says "Preparing graphics N/M"
-  while it runs: about two seconds on a handheld. The list holds no game data:
-  vertex programs are named by hash and found in your own copy of the game.
-  The installer's Prepare graphics step now takes seconds, not minutes.
-- On Android the build happens at the first start and is kept in the app's
-  files, which the system does not empty.
-- The other HDR variant is built in the background, so switching HDR in the
-  menu no longer stalls.
-- A damaged graphics cache is detected and built again.
-- With HDR on, the sun's disc fades smoothly from its centre instead of being
-  a flat bright patch with a hard edge, which showed as a square where houses
-  cut it off. Nothing changes with HDR off.
-
-## 0.1.2-beta "Lazy Generation"
-
-A pre-release for Android only, to try the touch controls. Saves and
-settings carry over.
-
-### Added
-
-- Touch controls on Android. In a race: a stick for the left thumb that
-  starts where you touch the left half of the screen, and GAS, BRAKE, BOOST,
-  BREAKER, LOOK and VIEW on the right. BOOST keeps accelerating, and a finger
-  can slide between GAS and BOOST without lifting. In menus: a d-pad, A, B,
-  X, Y, LT and RT. Pause and the settings menu sit at the top. The controls
-  hide while a controller is in use and come back when you touch the
-  screen. They keep clear of the HUD in every picture setting.
-- Settings for them on the Input page: Touch controls (Auto, Always, Off),
-  opacity, size and Accelerate automatically.
-
-### Changed
-
-- The settings menu works by touch: drag a list to scroll it, tap a row to
-  change it, drag or tap a slider.
-- Android has no Fullscreen setting any more. The game always fills the
-  screen. Switching fullscreen off showed the system bars over the game.
+- The game ships a list of the shaders and pipelines it needs and builds them all before the first picture ("Preparing graphics N/M"). The setup's graphics step takes seconds. On Android it runs at the first start and is kept in the app's files. The list holds no game data.
+- The other HDR variant is built in the background. A damaged graphics cache is detected and built again.
+- Android has no Fullscreen setting; the game always fills the screen.
 
 ### Fixed
 
-- The Crash Nav globe and the garage at car select are framed as on the Xbox.
-  The globe is large and sits on the left over the selected region, and the
-  car fills the garage view. Both were drawn too small because the recompiler
-  dropped the tangent from the game's field-of-view calculation (GitHub #15).
-  The same fix narrows the flyby over a crash junction before the start to
-  the game's own view.
-- Diagnostic logging switched on in the settings now stays on at the next
-  start. Before, it was off until you switched it off and on again in the
-  running game.
+- Windows with variable refresh (G-Sync, FreeSync): uneven frame times and a game clock that ran slightly fast (GitHub #4).
+- The Crash Nav globe and the garage were drawn too small. The recompiler dropped part of the game's field-of-view calculation (GitHub #15).
+- A failed sound bank load froze the race start or crashed Takedawn (GitHub #17).
+- Quitting could crash on some systems; the render and sound threads now stop before the graphics device closes (GitHub #17).
+- Windows, drive with 4096-byte sectors: "There is a problem with the disc you are using" (d-b-c-e).
+- Reset this page and Reset all settings acted on one keypress; they ask once more.
+- Diagnostic logging switched on in the settings was off at the next start.
+- LED sign words and chevron markers flickered on some US and European tracks.
 
 ## 0.1.1 "Lazy Generation"
 

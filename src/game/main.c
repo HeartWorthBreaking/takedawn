@@ -321,12 +321,27 @@ static void bo3_hdr_gains_init(void)
  * is.
  * Another sky and tint only move the edge by a(rho' - rho) C, a few nits.
  * Built here at start from the formula: nothing of the game is shipped; SDR
- * never sees it. */
+ * never sees it.
+ *
+ * Stage 0 alone (BO-203, 2026-10-17): the draw's combiner also blends in
+ * stage 1, the track's sky sheet (EU M1_V2: dace40c6da57205f, 1024x256),
+ * lerping by the sheet's alpha, colour and alpha alike:
+ *   rgb = t1.rgb * t1.a + t0.rgb * t0.a * (1 - t1.a)
+ *   a   = t1.b   * t1.a + t0.b   * t0.a * (1 - t1.a)
+ * The quad's stage-1 coordinates hit one point (or one line) of the sheet,
+ * so where that point is bright sky (t1.b * t1.a above the test's 53/255,
+ * 42 % of the Vienna sheet) every fragment of the quad passes the alpha test
+ * and the quad paints a flat square, or vertical streaks, of the sheet's
+ * colour over the sky. SDR clips it into the corona's white; HDR shows it:
+ * the square the owner saw with the pause menu open, and the barred block
+ * behind the hill. With HDR on the disc's draw reads (0, 0, 0, 0) at stage
+ * 1: rgb and alpha are the disc's own, the quad's corners fail the test. */
 static uint32_t s_sun_disc[32 * 32];
 static void bo3_hdr_sun_init(void)
 {
     static const struct nv2a_texrep_rect k_all = { 0, 0, 32, 32 };
-    static const struct nv2a_texrep_variant k_var = { s_sun_disc, &k_all, 1, 1 /* colours only */ };
+    static const struct nv2a_texrep_variant k_var = { s_sun_disc, &k_all, 1, 1 /* colours only */,
+                                                      1 /* stage 0 alone */ };
     static const struct nv2a_texrep_tex k_tex[] = {
         { "sun disc", 0x7e99c3527a07c692ull, 0x0F, 32, 32, &k_var, 1 },
     };

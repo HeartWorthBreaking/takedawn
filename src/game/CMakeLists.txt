@@ -26,6 +26,7 @@ if(ANDROID)
         glyphs.c
         soundtrack.c
         dsound_notify.c
+        soundbank.c
     mixer.c
     gp_image.c
     pcmanifest.c
@@ -54,6 +55,7 @@ add_executable(burnout3
     shaderbuild.c
     soundtrack.c
     dsound_notify.c
+    soundbank.c
     mixer.c
     gp_image.c
     pcmanifest.c
