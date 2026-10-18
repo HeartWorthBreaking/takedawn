@@ -133,20 +133,23 @@ the last 40 s of the same autopilot race, both 60 fps switches on):
 | Setting on, 175 Hz | 173.92 | 5.71 / 7.27 | 0.5% | 2.56 ms | 94% |
 
 Frame dumps from the race at 175 Hz showed the cars, the HUD and the
-takedown camera drawn as at 60. The toolkit's own tests pass (13 binaries,
-the overlay's 264 settings checks among them).
+takedown camera drawn as at 60. Played on the same machine, 2026-10-18, at
+render scale 4, with the setting turned on from the overlay, under KDE
+Plasma 6 (Wayland): on a 3440x1440 175 Hz display in a window and in
+fullscreen (SDL's desktop fullscreen, the mode on every desktop host), and
+on a 2560x1440 260 Hz display, both with variable refresh enabled. The
+display's rate from SDL, the locked row, races, the pause menu and
+two-player split screen worked as above, and the rate followed the window
+when it was moved from one display to another (Meta+arrow keys). On a
+1920x1080 60 Hz display (no variable refresh) the setting stays out of the
+way, as it should (it acts only above 61 Hz). An earlier build of the same
+blending, started by environment variables, was played in a window at 175
+Hz; that is where the pause menu's speed was found. The toolkit's own tests
+pass (13 binaries, the overlay's 264 settings checks among them).
 
 ## Not verified
 
-- The setting in a window: the display's rate from SDL and the overlay row
-  have not been seen on screen. An earlier build of the same blending,
-  started by environment variables, was played in a window at 175 Hz; that
-  is where the pause menu's speed was found.
-- Variable refresh, exclusive fullscreen, a window moved between displays.
 - Windows, macOS (Metal), the Steam Deck, Android: not built or run.
-- Two-player split screen at a high rate: no scripted drive reaches it.
-- Render scales above 1 at a high rate: the GPU's share grows with every
-  picture.
 
 Debug: `BO3_HIREFRESH_STATS=1` logs once a second what was blended;
 `BO3_HIREFRESH_TRACE=<file>` writes player 1's car position per picture.
