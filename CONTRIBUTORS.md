@@ -22,6 +22,12 @@ the runtime work that got every mode playing.
 The fork of the toolkit that Takedawn's runtime is based on, with the Metal
 backend and the first macOS host.
 
+## Code contributions
+
+### [HeartWorthBreaking](https://github.com/HeartWorthBreaking)
+Optional mod folders: disc files replaced by files in folders named by
+`TAKEDAWN_MODS` (Windows).
+
 ## Issue reports and testing (upstream)
 
 ### [@VincxBlox](https://github.com/VincxBlox)

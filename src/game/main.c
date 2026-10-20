@@ -1893,6 +1893,15 @@ static int host_main(void)
     /* BO-108: the user's music folder as the title's custom soundtracks.
      * Nothing unless audio.custom_music_dir (--music-dir) names one. */
     bo3_soundtrack_init();
+#if defined(_WIN32)
+    /* Mod folders: disc files replaced by files in the folders TAKEDAWN_MODS
+     * names (modfs.c, docs/mod-folders.md). Nothing unless it is set. After
+     * the soundtrack, whose path hook it chains to. */
+    {
+        extern void bo3_modfs_init(void);
+        bo3_modfs_init();
+    }
+#endif
     /* BO-114: the host mixer's buses, wave table and preset file. Names
      * only unless audio.mixer (RECOMP_AUDIO_MIXER) is on. */
     {
