@@ -38,6 +38,10 @@ a key or a controller button is pressed (xboxrecomp#2). Shipped in 0.2.1.
 Native Windows builds from Git Bash (#12), and the fix for drives with 4K
 sectors (xboxrecomp#1).
 
+### [HeartWorthBreaking](https://github.com/HeartWorthBreaking)
+Optional mod folders: disc files replaced by files in folders named by
+`TAKEDAWN_MODS` (Windows).
+
 ## Issue reports and testing (upstream)
 
 ### [@VincxBlox](https://github.com/VincxBlox)

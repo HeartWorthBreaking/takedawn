@@ -1043,6 +1043,7 @@ Further documents:
 | Bloom, motion blur and how effects follow the render scale | [docs/effects.md](docs/effects.md) |
 | Driving controls: Xbox and PS2 layout | [docs/controls.md](docs/controls.md) |
 | Draw distance and vehicle detail | [docs/draw-distance.md](docs/draw-distance.md) |
+| Mod folders: replace disc files with your own (Windows) | [docs/mod-folders.md](docs/mod-folders.md) |
 | Potato mode: real-time race start on machines below 60 fps | [docs/race-clock.md](docs/race-clock.md) |
 | High refresh rate: drawing above 60 fps | [docs/high-refresh.md](docs/high-refresh.md) |
 | Button prompt artwork | [assets/glyphs/README.md](assets/glyphs/README.md) |
