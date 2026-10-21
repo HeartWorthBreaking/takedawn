@@ -192,7 +192,23 @@ the missing-texture colour without a crash. The path refusals, a drive root as
 a folder and eight threads looking files up at once were checked with
 synthetic files. No measurable change in frame times with the variable set.
 
-Not run on Linux, macOS, the Steam Deck or Android yet: the POSIX code there
-and `tests/modfs` on those systems are to be checked by building and running
-them (the test's link, pipe, permission and case-sensitivity cases run only
-there). Files other than `static.dat` in a race are not checked.
+Windows, after the POSIX version: the game builds with the same regen key and
+patches; `tests/modfs` and the first version's checks pass; the cases above,
+plus invalid paths, mixed case, two folders and the custom soundtrack's hook in
+the same chain, were run in a race again. Lookups cost what they did before.
+
+`tests/modfs` elsewhere (2026-10-21, warnings as errors, no game data):
+
+- Linux (Ubuntu 24.04, gcc 13.3, case-sensitive `/tmp`): 67 of 67 pass, and
+  again under AddressSanitizer + UndefinedBehaviorSanitizer and under
+  ThreadSanitizer with nothing reported.
+- macOS (Apple clang 17): 60 pass, 1 skipped (the case ambiguity needs a
+  case-sensitive volume) on the usual volume; 67 of 67 on a case-sensitive
+  APFS volume.
+- Android (NDK clang 21, arm64, API 33): compiles and links; not run.
+
+Not checked: the game itself with mod folders on Linux, the Steam Deck (the
+Linux code; the Windows build under Proton neither), macOS or Android; on
+Android the `mods` folder default on a real device. A passing test does not
+rule out the check-then-open window in "What is refused". Files other than
+`static.dat` in a race are not checked.
