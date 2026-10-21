@@ -7,6 +7,7 @@
  * Windows) say SKIP. */
 #include "kernel.h"   /* xbox_PathRedirectHook */
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,10 +40,26 @@ static int s_fail, s_pass, s_skip;
     fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 #define SKIP(...) do { s_skip++; printf("SKIP "); printf(__VA_ARGS__); putchar('\n'); } while (0)
 
+/* snprintf that must fit: a path too long for the test's buffers stops the
+ * test (exit 2) rather than testing a cut-off path. */
+static void fit(char *buf, size_t n, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = vsnprintf(buf, n, fmt, ap);
+    va_end(ap);
+    if (r < 0 || (size_t)r >= n) {
+        fprintf(stderr, "a path is too long for the test's buffers\n");
+        exit(2);
+    }
+}
+
 /* ---- the folders ---- */
 
 static char s_root[512];
-static char s_made[128][600];   /* made, removed in reverse at the end */
+static char s_made[128][700];   /* made, removed in reverse at the end */
 static int  s_kind[128];        /* 0 file, 1 folder, 2 link (or junction), 3 folder chmod 000 */
 static int  s_nmade;
 
@@ -51,7 +68,7 @@ static const char *at(const char *rel)
     static char b[4][700];
     static int k;
     char *o = b[k++ & 3];
-    snprintf(o, sizeof b[0], "%s" SEP "%s", s_root, rel);
+    fit(o, sizeof b[0], "%s" SEP "%s", s_root, rel);
 #if defined(_WIN32)
     for (char *p = o; *p; p++)
         if (*p == '/')
@@ -63,7 +80,7 @@ static const char *at(const char *rel)
 static void remember(const char *path, int kind)
 {
     if (s_nmade < (int)(sizeof s_made / sizeof s_made[0])) {
-        snprintf(s_made[s_nmade], sizeof s_made[0], "%s", path);
+        fit(s_made[s_nmade], sizeof s_made[0], "%s", path);
         s_kind[s_nmade++] = kind;
     }
 }
@@ -84,7 +101,7 @@ static int make_dir(const char *path)
 static int make_file(const char *rel, const char *text)
 {
     char p[700];
-    snprintf(p, sizeof p, "%s", at(rel));
+    fit(p, sizeof p, "%s", at(rel));
     for (char *s = p + strlen(s_root) + 1; *s; s++) {
         if (*s == SEP[0]) {
             char c = *s;
@@ -133,20 +150,20 @@ static int make_root(void)
     DWORD n = GetTempPathA(sizeof tmp, tmp);
     if (!n || n >= sizeof tmp)
         return 0;
-    snprintf(s_root, sizeof s_root, "%sbo3_modfs_%lu_%lu", tmp, (unsigned long)GetCurrentProcessId(),
+    fit(s_root, sizeof s_root, "%sbo3_modfs_%lu_%lu", tmp, (unsigned long)GetCurrentProcessId(),
              (unsigned long)GetTickCount());
     return _mkdir(s_root) == 0;
 #else
     const char *t = getenv("TMPDIR");
     char tmpl[512], real[PATH_MAX];
     size_t n;
-    snprintf(tmpl, sizeof tmpl, "%s", t && *t ? t : "/tmp");
+    fit(tmpl, sizeof tmpl, "%s", t && *t ? t : "/tmp");
     for (n = strlen(tmpl); n > 1 && tmpl[n - 1] == '/'; n--)
         tmpl[n - 1] = 0;                            /* macOS: TMPDIR ends in '/' */
-    snprintf(tmpl + n, sizeof tmpl - n, "/bo3_modfs_XXXXXX");
+    fit(tmpl + n, sizeof tmpl - n, "/bo3_modfs_XXXXXX");
     if (!mkdtemp(tmpl) || !realpath(tmpl, real))
         return 0;
-    snprintf(s_root, sizeof s_root, "%s", real);   /* macOS: /var -> /private/var */
+    fit(s_root, sizeof s_root, "%s", real);   /* macOS: /var -> /private/var */
     return 1;
 #endif
 }
@@ -306,7 +323,7 @@ int main(void)
 
     /* 2. Several folders, the first one named wins; a missing folder and a
      *    file named as one are skipped. */
-    snprintf(list, sizeof list, "%s;%s;%s;%s;%s", at("missing"), at("plainfile"), at("modA"), at("modB"),
+    fit(list, sizeof list, "%s;%s;%s;%s;%s", at("missing"), at("plainfile"), at("modA"), at("modB"),
              at("lower"));
     set_mods(list);
     CHECK(xbox_PathRedirectHook != prev_hook && xbox_PathRedirectHook != NULL, "set: the hook is installed");
@@ -373,7 +390,7 @@ int main(void)
         char longpart[400], deep[1200];
         memset(longpart, 'a', 300);
         longpart[300] = 0;
-        snprintf(deep, sizeof deep, "D:\\%s", longpart);
+        fit(deep, sizeof deep, "D:\\%s", longpart);
         CHECK(refused(deep), "a 300-character name");
         strcpy(deep, "D:\\");
         for (int i = 0; i < 20; i++)
@@ -388,7 +405,7 @@ int main(void)
     {
         char cmd[1600];
         make_dir(at("modJ"));
-        snprintf(cmd, sizeof cmd, "mklink /J \"%s\" \"%s\" >NUL 2>&1", at("modJ/Tracks"), at("outside"));
+        fit(cmd, sizeof cmd, "mklink /J \"%s\" \"%s\" >NUL 2>&1", at("modJ/Tracks"), at("outside"));
         if (system(cmd) == 0) {
             remember(at("modJ/Tracks"), 2);
             set_mods(at("modJ"));
@@ -413,7 +430,7 @@ int main(void)
         make_file("modL/Data/real.dat", "L real");
         if (symlink(at("modA"), at("rootlink")) == 0)
             remember(at("rootlink"), 2);
-        snprintf(list, sizeof list, "%s", at("modL"));
+        fit(list, sizeof list, "%s", at("modL"));
         set_mods(list);
         CHECK(refused("D:\\Tracks\\secret.dat"), "a folder link below the folder");
         CHECK(refused("D:\\tracks\\secret.dat"), "a folder link found by case");
@@ -459,7 +476,7 @@ int main(void)
         make_file("amb/DATA/x.bin", "amb DATA");
         make_file("amb/Exact/Y.bin", "Y");
         make_file("amb/Exact/y.bin", "y");
-        snprintf(list, sizeof list, "%s;%s", at("amb"), at("modB"));
+        fit(list, sizeof list, "%s;%s", at("amb"), at("modB"));
         set_mods(list);
         CHECK(refused("D:\\data\\x.bin"), "Data and DATA for data: refused");
         CHECK(refused("D:\\data\\only_b.bin"), "...and not taken from a later folder either");
@@ -480,10 +497,10 @@ int main(void)
 
     /* 8. The list: ';' only, empty items, trailing separators, a relative
      *    folder, more than eight. */
-    snprintf(list, sizeof list, ";;%s" SEP SEP ";;", at("modB"));
+    fit(list, sizeof list, ";;%s" SEP SEP ";;", at("modB"));
     set_mods(list);
     CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "B static"), "empty items and trailing separators");
-    snprintf(list, sizeof list, "%s:%s", at("modA"), at("modB"));
+    fit(list, sizeof list, "%s:%s", at("modA"), at("modB"));
     set_mods(list);
     CHECK(refused("D:\\Tracks\\US\\C3_V1\\static.dat"), "':' does not separate folders");
     {
@@ -503,13 +520,13 @@ int main(void)
     }
     list[0] = 0;
     for (int i = 0; i < 8; i++)
-        snprintf(list + strlen(list), sizeof list - strlen(list), "%s;", at("modB"));
-    snprintf(list + strlen(list), sizeof list - strlen(list), "%s", at("modA"));
+        fit(list + strlen(list), sizeof list - strlen(list), "%s;", at("modB"));
+    fit(list + strlen(list), sizeof list - strlen(list), "%s", at("modA"));
     set_mods(list);
     CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "B static"), "a ninth folder is ignored");
 
     /* 9. Threads: each gets its own answer. */
-    snprintf(list, sizeof list, "%s;%s", at("modA"), at("modB"));
+    fit(list, sizeof list, "%s;%s", at("modA"), at("modB"));
     set_mods(list);
     run_threads();
     {
@@ -525,7 +542,7 @@ int main(void)
                                              "miss, last part" };
         static const char *const guest[] = { "D:\\Tracks\\US\\C3_V1\\static.dat", "D:\\TRACKS\\us\\c3_v1\\Static.Dat",
                                              "D:\\Sound\\DSP\\B3XboxFx.bin", "D:\\Tracks\\US\\C3_V1\\enviro.dat" };
-        snprintf(list, sizeof list, "%s;%s;%s", at("modA"), at("modB"), at("lower"));
+        fit(list, sizeof list, "%s;%s;%s", at("modA"), at("modB"), at("lower"));
         set_mods(list);
         for (int g = 0; g < 4; g++) {
             double t0 = now_us();

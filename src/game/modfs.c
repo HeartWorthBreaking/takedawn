@@ -392,7 +392,14 @@ void bo3_modfs_init(void)
         return;
     strncpy(buf, e, sizeof buf - 1);
     buf[sizeof buf - 1] = 0;
-    for (char *tok = strtok(buf, ";"); tok; tok = strtok(NULL, ";")) {
+    /* Split at ';' by hand: strtok is not thread-safe, and bionic marks it
+     * deprecated. Empty items (";;") are skipped. */
+    for (char *tok = buf, *end; *tok; tok = end) {
+        end = tok + strcspn(tok, ";");
+        if (*end)
+            *end++ = 0;
+        if (!*tok)
+            continue;
         if (s_ndirs == MODFS_MAX_DIRS) {
             fprintf(stderr, "[MOD] more than %d folders: %s and the rest ignored\n",
                     MODFS_MAX_DIRS, tok);
