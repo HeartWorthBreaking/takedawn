@@ -118,14 +118,17 @@ The disc's own file is read instead when:
   `:`, a character Windows does not allow in a name (`< > " | ? *`), a control
   character or a byte that is not plain ASCII;
 - two names in the folder differ only in case (see Layout);
-- the resulting path is too long for the toolkit (260 characters).
+- the resulting path is too long for the toolkit: more than 255 characters
+  on Windows (the toolkit puts `\\?\` in front of it), 259 elsewhere.
 
 These rules are the same on every system, so a mod folder that works on one
 works on the others.
 
 A folder whose full path is not plain ASCII is ignored (on Windows the path is
 read in the guest's code page; elsewhere, in the same way, a `\` in it is not
-allowed either). A folder that does not exist is ignored.
+allowed either). A folder that does not exist is ignored. On Windows a folder
+must be on a drive letter (`C:\...`): a network share (`\\server\share\...`)
+and a path written with `\\?\` or `\\.\` are ignored.
 
 The checks are made when the game opens a file; the toolkit then opens the
 path. Someone who can change the mod folder while the game runs could swap a
@@ -143,16 +146,25 @@ know the format allows otherwise.
 
 ## Seeing what happened
 
-Every folder taken and every replaced file is written to the log, once:
+At the start, every folder taken and every one ignored is written to the log,
+in every build:
 
 ```
 [MOD] folder 1: D:\Burnout3Mods\MyTrackMod
-[MOD] D:\tracks\US\C3_V1\static.dat -> D:\Burnout3Mods\MyTrackMod\tracks\US\C3_V1\static.dat
 [MOD] ignored (not a folder): D:\Burnout3Mods\Typo
+```
+
+With diagnostic logging on (the settings' Advanced > Diagnostic logging, then
+a restart; or `RECOMP_LOG_DIAG=1`), each replaced file is written too, once:
+
+```
+[MOD] D:\tracks\US\C3_V1\static.dat -> D:\Burnout3Mods\MyTrackMod\tracks\US\C3_V1\static.dat
 ```
 
 On Linux, macOS and Android the host path is the folder's own spelling, for
 example `/home/deck/takedawn-mods/MyTrackMod/Tracks/US/C3_V1/static.dat`.
+A file refused because two names in a folder differ only in case is written
+the same way, with diagnostic logging on.
 
 The log is stderr; `RECOMP_STDIO_LOG=<file>` writes it to a file
 ([running.md](running.md)). On Android it is `takedawn.log` in the app's
