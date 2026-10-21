@@ -38,12 +38,16 @@
  *     cannot point outside itself. The folder itself may be reached through
  *     links: its full path is taken once, at the start;
  *   - anything that is not a regular file (a directory, a pipe, a device);
- *   - a host path of MAX_PATH characters or more (the toolkit's buffer).
+ *   - a host path too long for the toolkit's buffer (MODFS_HOST_MAX below).
  * A mod folder whose full path is not printable ASCII is ignored: on Windows
  * the path handed back is read in the guest's code page; elsewhere a '\' in
- * it is refused too, the toolkit turns it into '/'.
+ * it is refused too, the toolkit turns it into '/'. On Windows a folder must
+ * be on a drive letter (C:\...): a network share or a \\?\ or \\.\ path is
+ * ignored, "\\?\" put in front of it would not name it.
  *
- * Each replaced file is logged once: "[MOD] <guest path> -> <host path>".
+ * The folders taken and ignored are said at the start whatever the build
+ * (XR_NOTICE); each replaced file is logged once with diagnostic logging on:
+ * "[MOD] <guest path> -> <host path>".
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +65,18 @@
 #endif
 
 #include "kernel.h"   /* xbox_PathRedirectHook */
+#include "platform/xr_log.h"   /* XR_NOTICE; the print gate (also force-included) */
+
+/* The longest host path handed back is MODFS_HOST_MAX - 1 characters. The
+ * toolkit gives a path no rule claims to the host as it is (kernel_path.c,
+ * "Unrecognized Xbox path"), into a MAX_PATH buffer with its terminator: on
+ * Windows converted to MAX_PATH wide characters, with the "\\?\" in front
+ * (and a failed conversion is not reported), elsewhere copied. */
+#if defined(_WIN32)
+#define MODFS_HOST_MAX (MAX_PATH - 4)
+#else
+#define MODFS_HOST_MAX MAX_PATH
+#endif
 
 #if !defined(_WIN32)
 #ifndef NAME_MAX
@@ -180,19 +196,29 @@ static int mod_file(const char *dir, const char *rel, char *out, size_t n, int *
     }
 }
 
-/* The folder tok names, as a full path without a trailing separator. */
+/* The folder tok names, as a full path without a trailing separator. Only a
+ * folder on a drive letter (X:\...): the hook hands back "\\?\" + the path,
+ * which names nothing for a network share (\\server\share, whose long form
+ * is \\?\UNC\...) or a path that already is \\?\ or \\.\. */
 static int mod_folder(const char *tok, char *full)
 {
     DWORD n = GetFullPathNameA(tok, MAX_PATH, full, NULL);
-    DWORD a = n && n < MAX_PATH ? GetFileAttributesA(full) : INVALID_FILE_ATTRIBUTES;
+    DWORD a;
     size_t len;
 
+    if (n && n < MAX_PATH && !(ascii_lower((unsigned char)full[0]) >= 'a'
+            && ascii_lower((unsigned char)full[0]) <= 'z' && full[1] == ':' && full[2] == '\\')) {
+        XR_NOTICE("[MOD] ignored (not on a drive letter: network shares and \\\\?\\ paths "
+                  "are not supported): %s\n", tok);
+        return 0;
+    }
+    a = n && n < MAX_PATH ? GetFileAttributesA(full) : INVALID_FILE_ATTRIBUTES;
     if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
-        fprintf(stderr, "[MOD] ignored (not a folder): %s\n", tok);
+        XR_NOTICE("[MOD] ignored (not a folder): %s\n", tok);
         return 0;
     }
     if (!printable_ascii(full)) {
-        fprintf(stderr, "[MOD] ignored (the path is not plain ASCII): %s\n", tok);
+        XR_NOTICE("[MOD] ignored (the path is not plain ASCII): %s\n", tok);
         return 0;
     }
     len = strlen(full);
@@ -301,15 +327,15 @@ static int mod_folder(const char *tok, char *full)
     struct stat st;
 
     if (!realpath(tok, real) || stat(real, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        fprintf(stderr, "[MOD] ignored (not a folder): %s\n", tok);
+        XR_NOTICE("[MOD] ignored (not a folder): %s\n", tok);
         return 0;
     }
     if (!printable_ascii(real) || strchr(real, '\\')) {
-        fprintf(stderr, "[MOD] ignored (the path is not plain ASCII, or has a '\\'): %s\n", tok);
+        XR_NOTICE("[MOD] ignored (the path is not plain ASCII, or has a '\\'): %s\n", tok);
         return 0;
     }
     if (strlen(real) >= MAX_PATH) {
-        fprintf(stderr, "[MOD] ignored (the path is too long): %s\n", tok);
+        XR_NOTICE("[MOD] ignored (the path is too long): %s\n", tok);
         return 0;
     }
     strcpy(full, real);
@@ -350,7 +376,7 @@ static const char *redirect(const char *path)
         for (int i = 0; i < s_ndirs; i++) {
             char host[MAX_PATH];
             int ambiguous;
-            if (mod_file(s_dirs[i], rel, host, sizeof host, &ambiguous)) {
+            if (mod_file(s_dirs[i], rel, host, MODFS_HOST_MAX, &ambiguous)) {
 #if defined(_WIN32)
                 snprintf(t_out, sizeof t_out, "\\\\?\\%s", host);
 #else
@@ -401,14 +427,14 @@ void bo3_modfs_init(void)
         if (!*tok)
             continue;
         if (s_ndirs == MODFS_MAX_DIRS) {
-            fprintf(stderr, "[MOD] more than %d folders: %s and the rest ignored\n",
-                    MODFS_MAX_DIRS, tok);
+            XR_NOTICE("[MOD] more than %d folders: %s and the rest ignored\n",
+                      MODFS_MAX_DIRS, tok);
             break;
         }
         if (!mod_folder(tok, s_dirs[s_ndirs]))
             continue;
         s_ndirs++;
-        fprintf(stderr, "[MOD] folder %d: %s\n", s_ndirs, s_dirs[s_ndirs - 1]);
+        XR_NOTICE("[MOD] folder %d: %s\n", s_ndirs, s_dirs[s_ndirs - 1]);
     }
     fflush(stderr);
     if (!s_ndirs || xbox_PathRedirectHook == redirect)
