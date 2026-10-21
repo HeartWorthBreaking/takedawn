@@ -7,6 +7,7 @@
  * Windows) say SKIP. */
 #include "kernel.h"   /* xbox_PathRedirectHook */
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,12 +17,16 @@
 #if defined(_WIN32)
 #  include <windows.h>
 #  include <direct.h>
+#  include <io.h>
 #  include <process.h>
 #  define SETENV(k, v) _putenv_s(k, v)
 #  define UNSETENV(k) _putenv_s(k, "")
 #  define SEP "\\"
+#  define dup _dup
+#  define dup2 _dup2
+#  define close _close
+#  define fileno _fileno
 #else
-#  include <errno.h>
 #  include <limits.h>
 #  include <pthread.h>
 #  include <sys/stat.h>
@@ -34,6 +39,10 @@
 
 const char *(*xbox_PathRedirectHook)(const char *xbox_path);
 void bo3_modfs_init(void);
+/* The toolkit's print gate (platform/xr_log.h, compiled into modfs.c): 0 is a
+ * release build with diagnostic logging off. This file does not include it,
+ * so its own lines are never dropped. */
+extern int g_xr_log_diag;
 
 static int s_fail, s_pass, s_skip;
 #define CHECK(c, ...) do { if (c) s_pass++; else { s_fail++; fprintf(stderr, "FAIL line %d: ", __LINE__); \
@@ -87,6 +96,7 @@ static void remember(const char *path, int kind)
     }
 }
 
+/* 1 when the folder is there afterwards (made now, or already). */
 static int make_dir(const char *path)
 {
 #if defined(_WIN32)
@@ -96,10 +106,10 @@ static int make_dir(const char *path)
 #endif
     if (r == 0)
         remember(path, 1);
-    return r == 0;
+    return r == 0 || errno == EEXIST;
 }
 
-/* rel's folders, then the file with the given text. */
+/* rel's folders, then the file with the given text; 0 when any step fails. */
 static int make_file(const char *rel, const char *text)
 {
     char p[700];
@@ -108,7 +118,8 @@ static int make_file(const char *rel, const char *text)
         if (*s == SEP[0]) {
             char c = *s;
             *s = 0;
-            make_dir(p);
+            if (!make_dir(p))
+                return 0;
             *s = c;
         }
     }
@@ -121,8 +132,13 @@ static int make_file(const char *rel, const char *text)
     return 1;
 }
 
+/* Everything made, in reverse; also at exit (fit's exit(2), a failed start). */
 static void remove_all(void)
 {
+    static int done;
+    if (done || !s_root[0])
+        return;
+    done = 1;
     for (int i = s_nmade - 1; i >= 0; i--) {
 #if defined(_WIN32)
         if (s_kind[i] == 0)
@@ -228,6 +244,54 @@ static int refused(const char *guest)
     return r == NULL;   /* prev_hook answers NULL for every disc path */
 }
 
+/* What the toolkit does with an answer no path rule claims (kernel_path.c,
+ * "Unrecognized Xbox path"): on Windows it converts it into a MAX_PATH wide
+ * buffer with its terminator, XBOX_GUEST_CP, and does not check the result;
+ * elsewhere it copies it into MAX_PATH characters. A model of that hand-off,
+ * not the toolkit itself: 1 when host survives it whole. */
+static int handoff_ok(const char *host)
+{
+#if defined(_WIN32)
+    WCHAR w[MAX_PATH];
+    return MultiByteToWideChar(XBOX_GUEST_CP, 0, host, -1, w, MAX_PATH) != 0;
+#else
+    return strlen(host) < MAX_PATH;
+#endif
+}
+
+/* stderr into a file between capture_start and capture_end, then the text. */
+static int s_saved_err = -1;
+static int capture_start(const char *path)
+{
+    FILE *f;
+    fflush(stderr);
+    s_saved_err = dup(fileno(stderr));
+    f = fopen(path, "wb");
+    if (s_saved_err < 0 || !f || dup2(fileno(f), fileno(stderr)) < 0) {
+        if (f)
+            fclose(f);
+        return 0;
+    }
+    fclose(f);
+    remember(path, 0);
+    return 1;
+}
+
+static void capture_end(const char *path, char *out, size_t n)
+{
+    FILE *f;
+    size_t got = 0;
+    fflush(stderr);
+    dup2(s_saved_err, fileno(stderr));
+    close(s_saved_err);
+    f = fopen(path, "rb");
+    if (f) {
+        got = fread(out, 1, n - 1, f);
+        fclose(f);
+    }
+    out[got] = 0;
+}
+
 static void set_mods(const char *list)
 {
     if (list)
@@ -301,16 +365,20 @@ int main(void)
         fprintf(stderr, "cannot make a temporary folder\n");
         return 1;
     }
+    atexit(remove_all);
     sensitive = case_sensitive();
     printf("folders under %s (%s volume)\n", s_root, sensitive ? "case-sensitive" : "case-folding");
 
-    make_file("modA/Tracks/US/C3_V1/static.dat", "A static");
-    make_dir(at("modA/Tracks/dirfile"));
-    make_file("modB/Tracks/US/C3_V1/static.dat", "B static");
-    make_file("modB/Data/only_b.bin", "B only");
-    make_file("lower/tracks/us/c3_v1/lower.dat", "lower");
-    make_file("outside/secret.dat", "outside");
-    make_file("plainfile", "not a folder");
+    /* Every fixture is checked: a case whose files are not there would pass
+     * for the wrong reason. */
+    CHECK(make_file("modA/Tracks/US/C3_V1/static.dat", "A static"), "setup modA");
+    CHECK(make_dir(at("modA/Tracks/dirfile")), "setup modA/Tracks/dirfile");
+    CHECK(make_file("modB/Tracks/US/C3_V1/static.dat", "B static"), "setup modB");
+    CHECK(make_file("modB/Data/only_b.bin", "B only"), "setup modB/Data");
+    CHECK(make_file("lower/tracks/us/c3_v1/lower.dat", "lower"), "setup lower");
+    CHECK(make_file("outside/secret.dat", "outside"), "setup outside");
+    CHECK(make_file("plainfile", "not a folder"), "setup plainfile");
+    CHECK(make_file("modN/Data/x.dat", "N plain"), "setup modN");
 
     /* 1. Unset or empty: no hook at all, whatever was there stays. */
     set_mods(NULL);
@@ -339,6 +407,10 @@ int main(void)
     CHECK(!strcmp(read_back("d:\\Tracks\\US\\C3_V1\\static.dat"), "A static"), "d:\\ as well as D:\\");
     CHECK(!strcmp(read_back("D:\\Data\\only_b.bin"), "B only"), "a file only the second folder has");
     CHECK(!strcmp(read_back("D:\\Data/only_b.bin"), "B only"), "'/' in the guest path is a separator");
+    {
+        const char *h = ask("D:\\Tracks\\US\\C3_V1\\static.dat");
+        CHECK(h && handoff_ok(h), "the path handed back fits the toolkit's buffer: %s", h ? h : "(none)");
+    }
 
     /* 3. Case: the folder's own spelling, from any spelling the title uses. */
     CHECK(!strcmp(read_back("d:\\tracks\\us\\c3_v1\\STATIC.DAT"), "A static"), "mixed case finds modA's file");
@@ -363,7 +435,15 @@ int main(void)
     CHECK(s_prev_calls == 0, "a redirected path is not passed on");
     s_counting = 0;
 
-    /* 5. Names that are refused, the same on every host. */
+    /* 5. Names that are refused, the same on every host. Real files stand
+     *    behind the non-ASCII and the control-character name (where the file
+     *    system takes them), so only the name rule refuses those. */
+    if (!make_file("modA/Tracks/US/C3_V1/st\xc3\xa9.dat", "non-ASCII name"))
+        SKIP("a file with a non-ASCII name could not be made here");
+#if !defined(_WIN32)
+    if (!make_file("modA/Tracks/US/C3_V1/stat\x01ic.dat", "control name"))
+        SKIP("a file with a control character in its name could not be made here");
+#endif
     {
         static const char *const bad[] = {
             "D:\\..\\outside\\secret.dat",
@@ -397,12 +477,55 @@ int main(void)
         memset(longpart, 'a', 300);
         longpart[300] = 0;
         fit(deep, sizeof deep, "D:\\%s", longpart);
-        CHECK(refused(deep), "a 300-character name");
-        strcpy(deep, "D:\\");
-        for (int i = 0; i < 20; i++)
-            strcat(deep, "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF\\");
-        strcat(deep, "x.dat");
-        CHECK(refused(deep), "a path longer than MAX_PATH");
+        CHECK(refused(deep), "a 300-character name (longer than any file system allows)");
+    }
+
+    /* 5b. The longest host path handed back: on Windows 255 characters (the
+     *     toolkit puts "\\?\" in front and converts into MAX_PATH wide
+     *     characters with the terminator), elsewhere MAX_PATH - 1. Real files
+     *     just under, at and just over it: the ones over are refused (the
+     *     disc's file is read), the others found and fit the hand-off. */
+    {
+#if defined(_WIN32)
+        const int limit = MAX_PATH - 5, prefix = 4;
+#else
+        const int limit = MAX_PATH - 1, prefix = 0;
+#endif
+        char dir[700], name[300], rel[400], guest[400], text[32];
+        int lengths[4], made[4];
+        fit(dir, sizeof dir, "%s", at("len/Data"));
+        for (int i = 0; i < 4; i++) {
+            int t = limit - 1 + i, k = t - (int)strlen(dir) - 1;   /* host = dir + SEP + name */
+            lengths[i] = t;
+            made[i] = 0;
+            if (k < 8 || k > 250)
+                continue;
+            memset(name, 'n', (size_t)k - 4);
+            memcpy(name + k - 4, ".bin", 5);
+            fit(rel, sizeof rel, "len/Data/%s", name);
+            fit(text, sizeof text, "len %d", t);
+            made[i] = make_file(rel, text);
+        }
+        set_mods(at("len"));
+        for (int i = 0; i < 4; i++) {
+            int t = lengths[i], k = t - (int)strlen(dir) - 1;
+            const char *h;
+            if (!made[i]) {
+                SKIP("host path of %d characters: its file could not be made here", t);
+                continue;
+            }
+            memset(name, 'n', (size_t)k - 4);
+            memcpy(name + k - 4, ".bin", 5);
+            fit(guest, sizeof guest, "D:\\Data\\%s", name);
+            fit(text, sizeof text, "len %d", t);
+            h = ask(guest);
+            if (t <= limit)
+                CHECK(h && (int)strlen(h) == t + prefix && handoff_ok(h) && !strcmp(read_back(guest), text),
+                      "host path of %d characters (limit %d): found, fits the hand-off", t, limit);
+            else
+                CHECK(!h, "host path of %d characters (limit %d): refused, not handed on cut off (%s)",
+                      t, limit, h ? h : "none");
+        }
     }
 
     /* 6. Links below a folder are refused; a folder reached through a link
@@ -410,48 +533,112 @@ int main(void)
 #if defined(_WIN32)
     {
         char cmd[1600];
-        make_dir(at("modJ"));
+        CHECK(make_dir(at("modJ")), "setup modJ");
         fit(cmd, sizeof cmd, "mklink /J \"%s\" \"%s\" >NUL 2>&1", at("modJ/Tracks"), at("outside"));
         if (system(cmd) == 0) {
             remember(at("modJ/Tracks"), 2);
             set_mods(at("modJ"));
+            /* Positive control: through the junction the file is there. */
+            CHECK(GetFileAttributesA(at("modJ/Tracks/secret.dat")) != INVALID_FILE_ATTRIBUTES,
+                  "setup: the junction leads to a real file");
             CHECK(refused("D:\\Tracks\\secret.dat"), "a junction below the folder");
         } else {
             SKIP("junction: mklink /J failed");
         }
         SKIP("symbolic links, pipes, unreadable folders: POSIX cases");
     }
+
+    /* Only folders on a drive letter. The same folder by its drive path is
+     * the positive control; written as a network share or with \\?\ or \\.\
+     * it would be handed back as "\\?\\\..." and name nothing, so it is
+     * ignored and the disc's file is read. */
+    {
+        static const char *const pre[] = { "\\\\?\\", "\\\\.\\", "//?/" };
+        char p[900];
+        set_mods(at("modA"));
+        CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "A static"), "modA by its drive path");
+        for (size_t i = 0; i < sizeof pre / sizeof pre[0]; i++) {
+            fit(p, sizeof p, "%s%s", pre[i], at("modA"));
+            set_mods(p);
+            CHECK(refused("D:\\Tracks\\US\\C3_V1\\static.dat"), "ignored: %s", p);
+        }
+        fit(p, sizeof p, "\\\\localhost\\%c$%s", at("modA")[0], at("modA") + 2);
+        set_mods(p);
+        CHECK(refused("D:\\Tracks\\US\\C3_V1\\static.dat"), "ignored (network share): %s", p);
+        set_mods("\\\\no-such-host.invalid\\share\\mods");
+        CHECK(refused("D:\\Tracks\\US\\C3_V1\\static.dat"), "ignored (network share, without asking the network)");
+        fit(p, sizeof p, "\\\\localhost\\%c$%s;%s", at("modA")[0], at("modA") + 2, at("modB"));
+        set_mods(p);
+        CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "B static"),
+              "an ignored share does not stop the next folder");
+    }
 #else
     {
-        make_dir(at("modL"));
-        make_dir(at("modL/Data"));
-        if (symlink(at("outside"), at("modL/Tracks")) == 0)
-            remember(at("modL/Tracks"), 2);
-        if (symlink(at("outside/secret.dat"), at("modL/Data/link.dat")) == 0)
-            remember(at("modL/Data/link.dat"), 2);
-        if (symlink("../../outside/secret.dat", at("modL/Data/rel.dat")) == 0)
-            remember(at("modL/Data/rel.dat"), 2);
-        if (mkfifo(at("modL/Data/pipe.dat"), 0644) == 0)
-            remember(at("modL/Data/pipe.dat"), 0);
-        make_file("modL/Data/real.dat", "L real");
-        if (symlink(at("modA"), at("rootlink")) == 0)
-            remember(at("rootlink"), 2);
+        struct stat st;
+        int ok;
+        CHECK(make_dir(at("modL")) && make_dir(at("modL/Data")), "setup modL");
+        CHECK(make_file("modL/Data/real.dat", "L real"), "setup modL/Data/real.dat");
         fit(list, sizeof list, "%s", at("modL"));
+        /* Each link is made, then shown to reach a real file when followed
+         * (what the lookup would return without the rule), then refused. */
+        ok = symlink(at("outside"), at("modL/Tracks")) == 0;
+        if (ok)
+            remember(at("modL/Tracks"), 2);
+        if (!ok) {
+            SKIP("a folder link: symlink failed (%s)", strerror(errno));
+        } else {
+            set_mods(list);
+            CHECK(stat(at("modL/Tracks/secret.dat"), &st) == 0, "setup: the folder link leads to a real file");
+            CHECK(refused("D:\\Tracks\\secret.dat"), "a folder link below the folder");
+            CHECK(refused("D:\\tracks\\secret.dat"), "a folder link found by case");
+        }
+        ok = symlink(at("outside/secret.dat"), at("modL/Data/link.dat")) == 0;
+        if (ok)
+            remember(at("modL/Data/link.dat"), 2);
+        if (!ok) {
+            SKIP("a file link: symlink failed (%s)", strerror(errno));
+        } else {
+            set_mods(list);
+            CHECK(stat(at("modL/Data/link.dat"), &st) == 0 && S_ISREG(st.st_mode), "setup: the file link leads to a file");
+            CHECK(refused("D:\\Data\\link.dat"), "a file link (absolute)");
+        }
+        ok = symlink("../../outside/secret.dat", at("modL/Data/rel.dat")) == 0;
+        if (ok)
+            remember(at("modL/Data/rel.dat"), 2);
+        if (!ok) {
+            SKIP("a relative file link: symlink failed (%s)", strerror(errno));
+        } else {
+            set_mods(list);
+            CHECK(stat(at("modL/Data/rel.dat"), &st) == 0 && S_ISREG(st.st_mode), "setup: the relative link leads to a file");
+            CHECK(refused("D:\\Data\\rel.dat"), "a file link (relative, ../..)");
+        }
+        ok = mkfifo(at("modL/Data/pipe.dat"), 0644) == 0;
+        if (ok)
+            remember(at("modL/Data/pipe.dat"), 0);
+        if (!ok) {
+            SKIP("a pipe: mkfifo failed (%s)", strerror(errno));
+        } else {
+            set_mods(list);
+            CHECK(lstat(at("modL/Data/pipe.dat"), &st) == 0 && S_ISFIFO(st.st_mode), "setup: the pipe is there");
+            CHECK(refused("D:\\Data\\pipe.dat"), "a pipe (and the lookup did not block on it)");
+        }
         set_mods(list);
-        CHECK(refused("D:\\Tracks\\secret.dat"), "a folder link below the folder");
-        CHECK(refused("D:\\tracks\\secret.dat"), "a folder link found by case");
-        CHECK(refused("D:\\Data\\link.dat"), "a file link (absolute)");
-        CHECK(refused("D:\\Data\\rel.dat"), "a file link (relative, ../..)");
-        CHECK(refused("D:\\Data\\pipe.dat"), "a pipe (and the lookup did not block on it)");
         CHECK(!strcmp(read_back("D:\\Data\\real.dat"), "L real"), "a real file beside them");
-        set_mods(at("rootlink"));
-        CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "A static"), "a folder named through a link");
-        {
-            const char *h = ask("D:\\Tracks\\US\\C3_V1\\static.dat");
-            CHECK(h && strstr(h, SEP "modA" SEP), "the link is resolved once, at the start: %s", h ? h : "(none)");
+        ok = symlink(at("modA"), at("rootlink")) == 0;
+        if (ok)
+            remember(at("rootlink"), 2);
+        if (!ok) {
+            SKIP("a folder named through a link: symlink failed (%s)", strerror(errno));
+        } else {
+            set_mods(at("rootlink"));
+            CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "A static"), "a folder named through a link");
+            {
+                const char *h = ask("D:\\Tracks\\US\\C3_V1\\static.dat");
+                CHECK(h && strstr(h, SEP "modA" SEP), "the link is resolved once, at the start: %s", h ? h : "(none)");
+            }
         }
 
-        make_file("modP/Data/x.dat", "P");
+        CHECK(make_file("modP/Data/x.dat", "P"), "setup modP");
         if (geteuid() == 0) {
             SKIP("unreadable folder: running as root, permissions do not stop it");
         } else if (chmod(at("modP/Data"), 0) == 0) {
@@ -464,17 +651,37 @@ int main(void)
             chmod(at("modP/Data"), 0755);
         }
 
-        if (make_dir(at("mod\xc3\xa9"))) {
-            set_mods(at("mod\xc3\xa9"));
-            CHECK(!xbox_PathRedirectHook || refused("D:\\Tracks\\US\\C3_V1\\static.dat"), "a non-ASCII folder is ignored");
-        }
-        if (make_dir(at("mod\\x"))) {
-            make_file("mod\\x/Data/x.dat", "backslash");
+        /* A '\' in a folder's name: the same tree as modN, which is found. */
+        if (!make_file("mod\\x/Data/x.dat", "backslash")) {
+            SKIP("a folder with a '\\': it could not be made (%s)", strerror(errno));
+        } else {
+            set_mods(at("modN"));
+            CHECK(!strcmp(read_back("D:\\Data\\x.dat"), "N plain"), "the plain twin modN is found");
             set_mods(at("mod\\x"));
             CHECK(refused("D:\\Data\\x.dat"), "a folder with a '\\' is ignored");
         }
     }
 #endif
+
+    /* A folder whose path is not plain ASCII, with a real file in it: the
+     * same tree as modN (found), so only the folder's name stops it. */
+    {
+#if defined(_WIN32)
+        const char *na = "mod\xe9";           /* the ANSI code page's e-acute */
+#else
+        const char *na = "mod\xc3\xa9";       /* UTF-8 */
+#endif
+        char rel[64];
+        fit(rel, sizeof rel, "%s/Data/x.dat", na);
+        if (!make_file(rel, "non-ASCII")) {
+            SKIP("a non-ASCII folder: it could not be made here");
+        } else {
+            set_mods(at("modN"));
+            CHECK(!strcmp(read_back("D:\\Data\\x.dat"), "N plain"), "the plain twin modN is found");
+            set_mods(at(na));
+            CHECK(refused("D:\\Data\\x.dat"), "a non-ASCII folder is ignored");
+        }
+    }
 
     /* 7. Two names that differ only in case: the one as written, else none. */
     if (sensitive) {
@@ -555,6 +762,46 @@ int main(void)
             for (int i = 0; i < 2000; i++)
                 ask(guest[g]);
             printf("cost: %-17s %6.2f us a lookup (3 folders)\n", kind[g], (now_us() - t0) / 2000);
+        }
+    }
+
+    /* 11. What a release build says. The print gate drops plain stderr lines
+     *     while diagnostic logging is off (g_xr_log_diag 0, what xr_log_init
+     *     sets for a release build): the folders taken and ignored must still
+     *     be there (XR_NOTICE), the per-file lines only with diagnostics. */
+    {
+        static char log[8192];
+        char path[700];
+        fit(path, sizeof path, "%s", at("log_release.txt"));
+        fit(list, sizeof list, "%s;%s", at("missing"), at("modA"));
+        g_xr_log_diag = 0;
+        if (!capture_start(path)) {
+            g_xr_log_diag = 1;
+            SKIP("release log: stderr could not be captured");
+        } else {
+            set_mods(list);
+            ask("D:\\Tracks\\US\\C3_V1\\static.dat");
+#if defined(_WIN32)
+            set_mods("\\\\no-such-host.invalid\\share\\mods");
+#endif
+            capture_end(path, log, sizeof log);
+            g_xr_log_diag = 1;
+            CHECK(strstr(log, "[MOD] ignored (not a folder): "), "release: an ignored folder is said:\n%s", log);
+            CHECK(strstr(log, "[MOD] folder 1: "), "release: the folder taken is said:\n%s", log);
+#if defined(_WIN32)
+            CHECK(strstr(log, "[MOD] ignored (not on a drive letter"), "release: a network share is said:\n%s", log);
+#endif
+            CHECK(!strstr(log, "static.dat -> "), "release: no per-file line without diagnostics:\n%s", log);
+        }
+        fit(path, sizeof path, "%s", at("log_diag.txt"));
+        if (capture_start(path)) {
+            set_mods(list);   /* a new start: the log-once list is empty again */
+            ask("D:\\Tracks\\US\\C3_V1\\static.dat");
+            capture_end(path, log, sizeof log);
+            CHECK(strstr(log, "[MOD] folder 1: ") && strstr(log, "static.dat -> "),
+                  "diagnostics on: the folder and the per-file line:\n%s", log);
+        } else {
+            SKIP("diagnostic log: stderr could not be captured");
         }
     }
 
