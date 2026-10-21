@@ -26,7 +26,7 @@ backend and the first macOS host.
 
 ### [HeartWorthBreaking](https://github.com/HeartWorthBreaking)
 Optional mod folders: disc files replaced by files in folders named by
-`TAKEDAWN_MODS` (Windows).
+`TAKEDAWN_MODS` (Windows, Linux, macOS; on Android the app's `mods` folder).
 
 ## Issue reports and testing (upstream)
 
