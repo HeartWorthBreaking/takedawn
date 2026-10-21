@@ -65,9 +65,11 @@ static int  s_nmade;
 
 static const char *at(const char *rel)
 {
-    static char b[4][700];
+    /* A few at a time: never more than 8 at() in one expression (the order
+     * C evaluates arguments in is not fixed). */
+    static char b[8][700];
     static int k;
-    char *o = b[k++ & 3];
+    char *o = b[k++ & 7];
     fit(o, sizeof b[0], "%s" SEP "%s", s_root, rel);
 #if defined(_WIN32)
     for (char *p = o; *p; p++)
@@ -323,8 +325,12 @@ int main(void)
 
     /* 2. Several folders, the first one named wins; a missing folder and a
      *    file named as one are skipped. */
-    fit(list, sizeof list, "%s;%s;%s;%s;%s", at("missing"), at("plainfile"), at("modA"), at("modB"),
-             at("lower"));
+    {
+        static const char *const names[] = { "missing", "plainfile", "modA", "modB", "lower" };
+        list[0] = 0;
+        for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+            fit(list + strlen(list), sizeof list - strlen(list), "%s%s", i ? ";" : "", at(names[i]));
+    }
     set_mods(list);
     CHECK(xbox_PathRedirectHook != prev_hook && xbox_PathRedirectHook != NULL, "set: the hook is installed");
     CHECK(!strcmp(read_back("D:\\Tracks\\US\\C3_V1\\static.dat"), "A static"), "first folder wins");
