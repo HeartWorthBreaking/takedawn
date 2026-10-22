@@ -103,6 +103,8 @@ if(NOT ANDROID)
     add_subdirectory(tests/mixer)
     # The GP effects image as wired for the APU's model (BO-119).
     add_subdirectory(tests/gp)
+    # Custom music at start: when the switch is due (src/game/soundtrack_start.h, BO-230).
+    add_subdirectory(tests/start)
     # When a start-up failure may show a message box (src/game/fatal.c).
     add_subdirectory(tests/fatal)
 endif()

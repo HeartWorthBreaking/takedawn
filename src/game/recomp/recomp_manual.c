@@ -95,12 +95,16 @@ extern ptrdiff_t g_xbox_mem_offset;
 extern void sub_001D0554_gen(void);
 extern void sub_0030211F_gen(void);
 extern void sub_001537C0_gen(void);
+extern void sub_00155420_gen(void);
 
 void sub_001D0554(void) { bo3_soundtrack_open_song(sub_001D0554_gen); }
 void sub_0030211F(void) { bo3_soundtrack_create_decoder(sub_0030211F_gen); }
 /* The title's track start: a custom list's index must not reach EA GAMES
  * TRAX's 44-entry table (BO-120). */
 void sub_001537C0(void) { bo3_soundtrack_start_track(sub_001537C0_gen); }
+/* The title's "start the music of the source chosen" (BO-230): the one place
+ * the chosen soundtrack is read, and the one place a start switches it. */
+void sub_00155420(void) { bo3_soundtrack_start_source(sub_00155420_gen); }
 
 /* DirectSound's "voice done" (BO-173, ../dsound_notify.c): a voice whose
  * done notification still waits for the DPC is not queued twice. */
@@ -117,6 +121,37 @@ void sub_002FAAEF(void) { bo3_dsound_voice_done(sub_002FAAEF_gen); }
 extern void sub_001F65A0_gen(void);
 
 void sub_001F65A0(void) { bo3_wave_dict_count(sub_001F65A0_gen); }
+
+/* Pictures between the simulation's steps (../hirefresh.c):
+ * the frame's steps, RenderWare's frame sync, the vehicles' draw, the
+ * HUD's time, the players' cameras, the sparks' clock, the race audio, the
+ * effects clock and the swap's count. As shipped unless graphics.high_refresh
+ * is in force (the swap is only counted). */
+#include "../hirefresh.h"
+
+extern void sub_000165F0_gen(void);
+extern void sub_001E15E0_gen(void);
+extern void sub_001DD280_gen(void);
+extern void sub_000303D0_gen(void);
+extern void sub_000535E0_gen(void);
+extern void sub_00350DB0_gen(void);
+extern void sub_00167940_gen(void);
+extern void sub_00038200_gen(void);
+extern void sub_000367C0_gen(void);
+extern void sub_0013EF40_gen(void);
+extern void sub_00188750_gen(void);
+
+void sub_000165F0(void) { bo3_update(sub_000165F0_gen); }
+void sub_001E15E0(void) { bo3_frame_sync_dirty(sub_001E15E0_gen); }
+void sub_001DD280(void) { bo3_frame_get_ltm(sub_001DD280_gen); }
+void sub_000303D0(void) { bo3_draw_vehicle(sub_000303D0_gen); }
+void sub_000535E0(void) { bo3_hud_update(sub_000535E0_gen); }
+void sub_00350DB0(void) { bo3_swap(sub_00350DB0_gen); }
+void sub_00167940(void) { bo3_player_frame(sub_00167940_gen); }
+void sub_00038200(void) { bo3_spark_history(sub_00038200_gen); }
+void sub_000367C0(void) { bo3_spark_draw(sub_000367C0_gen); }
+void sub_0013EF40(void) { bo3_race_audio(sub_0013EF40_gen); }
+void sub_00188750(void) { bo3_fx_clock(sub_00188750_gen); }
 
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
