@@ -22,6 +22,22 @@ the runtime work that got every mode playing.
 The fork of the toolkit that Takedawn's runtime is based on, with the Metal
 backend and the first macOS host.
 
+## Code contributions
+
+### [Naitrate](https://github.com/Naitrate)
+The High refresh rate setting (#33, with xboxrecomp#3): the game keeps its 60
+steps a second and the picture is drawn between them at the display's rate.
+Off by default, and the same as the original when off. Shipped in 0.2.1 after
+we moved it onto the port's new frame pacing.
+
+### [jillsandwich1998](https://github.com/jillsandwich1998)
+The mouse cursor that hides itself after 2.5 seconds without movement and when
+a key or a controller button is pressed (xboxrecomp#2). Shipped in 0.2.1.
+
+### [d-b-c-e](https://github.com/d-b-c-e)
+Native Windows builds from Git Bash (#12), and the fix for drives with 4K
+sectors (xboxrecomp#1).
+
 ## Issue reports and testing (upstream)
 
 ### [@VincxBlox](https://github.com/VincxBlox)
