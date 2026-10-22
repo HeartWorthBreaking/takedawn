@@ -599,7 +599,7 @@ still in the menu. Everything else that changes the console's look
 | Upscale road surfaces | On, Off | Off. Shown when Texture upscale is on. The upscalers can make the road's fine grain look noisy |
 | Upscale while loading | On, Off | On. Shown when Texture upscale is on. Does most of the sharpening during the loading screen and the countdown, so the first race on a track hitches less. A fast PC can leave it off |
 | Dither (Mac only) | On, Off | Off. A faint noise that hides stripes in smooth gradients such as the sky |
-| HDR | On, Off | Off. Shown when the display does HDR: Use HDR on in Windows, or HDR on in game mode on the Steam Deck and Linux. Lamps, sparks, the boost glow and the sun go brighter than white. HUD and menus keep their brightness. Rows for peak, paper white, HUD brightness, shadows, highlights and gamma appear when it is on. A Mac shows the row too, but I have not checked it there |
+| HDR | On, Off | Off. Shown when the display does HDR: Use HDR on in Windows, HDR on in game mode on the Steam Deck and Linux, or an HDR display on a Mac. Lamps, sparks, the boost glow and the sun go brighter than white. HUD and menus keep their brightness. Rows for peak, paper white, HUD brightness, shadows, highlights and gamma appear when it is on. |
 | Bloom | 0 to 100% | 100%, as on the console. The glow over the picture while you boost |
 | Motion blur | 0 to 100% | 100%, as on the console. The streaks towards the edges at speed |
 | Vehicle detail distance | Original, Far (2x), Farthest (4x) | Far, Original on Android. How far away rival cars and traffic keep their detailed models. It does not change scenery or where traffic appears |
@@ -961,7 +961,6 @@ handled.
 
 ## What's next
 
-- HDR on Macs. In testing.
 - Android: more devices (other Snapdragon handhelds, then non-Adreno GPUs
   with Vulkan 1.3).
 - Texture packs: load replacement textures from a folder, for higher
