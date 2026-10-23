@@ -68,6 +68,10 @@ add_executable(burnout3
 )
 endif()
 
+# Optional mod folders (TAKEDAWN_MODS, docs/mod-folders.md): the Win32 file
+# API on Windows, POSIX (openat, fdopendir) everywhere else.
+target_sources(burnout3 PRIVATE modfs.c)
+
 # The shipped shader coverage manifest (BO-208, docs/shader-prebuild.md):
 # graphics/pipelines-<backend>.manifest, compiled in as bytes so that it is
 # the same on every platform (an APK has no folder to read it from). No game

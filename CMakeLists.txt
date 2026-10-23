@@ -107,6 +107,8 @@ if(NOT ANDROID)
     add_subdirectory(tests/start)
     # When a start-up failure may show a message box (src/game/fatal.c).
     add_subdirectory(tests/fatal)
+    # The mod folders' lookup (src/game/modfs.c, docs/mod-folders.md).
+    add_subdirectory(tests/modfs)
 endif()
 
 # Line-level symbols for the runtime libraries, so a hang sample inside one
