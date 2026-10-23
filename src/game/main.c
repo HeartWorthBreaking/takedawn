@@ -3585,6 +3585,11 @@ int main(int argc, char **argv)
     bo3_autopilot_start(bo3_flips);
     /* BO-133: interface.menu_entry (menuentry.c). */
     bo3_menu_entry_start();
+    /* The MODS page in Settings (modsmenu.c): only with a mod folder in use. */
+    {
+        extern void bo3_modsmenu_start(void);
+        bo3_modsmenu_start();
+    }
     /* A or START leaves a training film (tutorial.c). */
     bo3_tutorial_start();
     /* BO-165: display.score_board (scoreboard.c). */

@@ -224,6 +224,49 @@ disabled = ["example.car-pack", "example.sound-pack"]
 Turning a mod off is also how to choose between two mods that have the same
 file. The order itself is fixed (see Which file is read).
 
+### The MODS page
+
+With a mod folder in use, the game's own Settings menu (Driver Details >
+Settings) has one more line, MODS. It opens a page in the same look, with the
+same sounds and the same buttons as the rest of the menu:
+
+```
+A.FIRST  ON                  <- a mod and whether it is on
+B.SECOND  OFF*               <- * : different at the next start
+BROKEN  INVALID              <- a mod that cannot be used (the reason below)
+APPLY - RESTART REQUIRED     <- A: save the choices
+V1.2  BY ANN  1 CONFLICTS    <- about the line under the cursor
+FIRST MOD, WITH A DESCRIPTION.
+```
+
+- A on a mod turns it on or off (a choice, not yet saved). A on APPLY saves
+  the choices in the mod list; they are used from the next start of the game
+  (SAVED - RESTART REQUIRED). If the list cannot be saved, the line says
+  NOT SAVED - SEE THE LOG and the choices stay, to try again. With
+  `TAKEDAWN_MOD_LIST=` (empty: no mod list) nothing can be saved.
+- B goes back to Settings. Choices not applied are kept until the game quits.
+- Six mods fit on one page; with more, four are shown at a time, with
+  PREVIOUS PAGE and NEXT PAGE.
+- Names, versions, authors and descriptions are shown in the menu's font:
+  letters in upper case, digits and plain punctuation as they are, any other
+  character as `?`, long text cut.
+- A mod that cannot be used (an invalid `mod.toml`, an id another mod has) is
+  listed with INVALID or SAME ID; with the cursor on it, the details line says
+  why (for a shared id, the other mod's folder name).
+- The last line shows the description of the mod under the cursor, else how
+  many mods are installed and how many are on.
+
+`TAKEDAWN_MODS_MENU=0` hides the page. Without a mod folder there is no MODS
+line, and the Settings menu is as before.
+
+The page needs four marks in the generated code (`si_items`, `si_select`,
+`mm_flow_sel`, `mm_flow_back`, config/patches.json). The build checks that
+the generated code calls each of them (cmake/modsmenu_marks.cmake): generated
+code made before them (no `regen.sh` after an update) builds a game without
+the MODS line, with a warning, and a release build stops. At the start the
+game also checks that the two flow marks reach the page; if not, the log says
+`[MODS] the MODS page is not listed: ...`.
+
 ### Conflicts
 
 At the start the log names every file of a mod that is on that another place
