@@ -709,6 +709,14 @@ static int folder_id(const char *full, unsigned long long id[2])
     return 1;
 }
 #else
+static int each_entry(int d, void (*fn)(const char *name, void *ctx), void *ctx);
+
+static void exact_toml(const char *nm, void *ctx)
+{
+    if (!strcmp(nm, "mod.toml"))
+        *(int *)ctx = 1;
+}
+
 static int scan_root(int r, int cap, int *total)
 {
     struct dirent *de;
@@ -745,8 +753,14 @@ static int scan_root(int r, int cap, int *total)
         if (sub < 0)
             continue;
         if (fstatat(sub, "mod.toml", &st, AT_SYMLINK_NOFOLLOW) == 0) {
-            (*total)++;
-            keep_smallest(&n, cap, de->d_name);
+            /* spelled mod.toml exactly, also on a volume that folds case
+             * (MOD.TOML is not a manifest on any system) */
+            int exact = 0;
+            each_entry(sub, exact_toml, &exact);
+            if (exact) {
+                (*total)++;
+                keep_smallest(&n, cap, de->d_name);
+            }
         }
         close(sub);
     }
@@ -1056,10 +1070,10 @@ static void list_mods(void)
         for (int j = i + 1; j < s_nmods; j++)
             if (s_mods[i].manifest.id[0] && !strcmp(s_mods[i].manifest.id, s_mods[j].manifest.id)) {
                 if (s_mods[i].usable)
-                    snprintf(s_mods[i].problem, sizeof s_mods[i].problem, "id %s is also used by %s",
+                    snprintf(s_mods[i].problem, sizeof s_mods[i].problem, "id %.64s is also used by %.70s",
                              s_mods[i].manifest.id, s_mods[j].folder);
                 if (s_mods[j].usable)
-                    snprintf(s_mods[j].problem, sizeof s_mods[j].problem, "id %s is also used by %s",
+                    snprintf(s_mods[j].problem, sizeof s_mods[j].problem, "id %.64s is also used by %.70s",
                              s_mods[j].manifest.id, s_mods[i].folder);
                 s_mods[i].usable = s_mods[j].usable = 0;
             }

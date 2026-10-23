@@ -687,7 +687,9 @@ static void manifests(int sensitive)
     CHECK(make_file("libdeep/deep/mod.toml", t) && make_file("libdeep/deep/files/a/b/c/d/e/f/g/h/i/deep.bin", "deep file")
           && make_file("libdeep/deep/files/Data/shallow.bin", "shallow"), "setup deep");
     /* Only mod.toml spelled so makes a mod, on every system; a mod with an
-     * empty files/ supplies nothing. */
+     * empty files/ supplies nothing. (Its own id, so that a wrongly taken
+     * MOD.TOML fails only its own check.) */
+    fit(t, sizeof t, ok_toml, "upper", "Upper");
     CHECK(make_file("libdeep/upper/MOD.TOML", t) && make_file("libdeep/upper/x.bin", "upper loose"), "setup MOD.TOML");
     fit(t, sizeof t, ok_toml, "empty.files", "Empty");
     CHECK(make_file("libdeep/empty/mod.toml", t) && make_dir(at("libdeep/empty/files")), "setup empty files");
