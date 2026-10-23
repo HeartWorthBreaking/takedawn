@@ -259,6 +259,14 @@ FIRST MOD, WITH A DESCRIPTION.
 `TAKEDAWN_MODS_MENU=0` hides the page. Without a mod folder there is no MODS
 line, and the Settings menu is as before.
 
+The page needs four marks in the generated code (`si_items`, `si_select`,
+`mm_flow_sel`, `mm_flow_back`, config/patches.json). The build checks that
+the generated code calls each of them (cmake/modsmenu_marks.cmake): generated
+code made before them (no `regen.sh` after an update) builds a game without
+the MODS line, with a warning, and a release build stops. At the start the
+game also checks that the two flow marks reach the page; if not, the log says
+`[MODS] the MODS page is not listed: ...`.
+
 ### Conflicts
 
 At the start the log names every file of a mod that is on that another place

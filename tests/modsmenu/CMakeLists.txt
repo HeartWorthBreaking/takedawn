@@ -25,3 +25,7 @@ if(NOT WIN32)
 endif()
 enable_testing()
 add_test(NAME bo3_modsmenu COMMAND bo3_modsmenu_test)
+# The build's check that the generated code has the page's marks
+# (cmake/modsmenu_marks.cmake), on made-up generated code.
+add_test(NAME bo3_modsmenu_marks COMMAND ${CMAKE_COMMAND} -DWORK=${CMAKE_CURRENT_BINARY_DIR}/marks_test
+         -P ${CMAKE_CURRENT_LIST_DIR}/marks_test.cmake)

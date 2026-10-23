@@ -103,9 +103,16 @@ static unsigned char s_choice[BO3_MODFS_MAX_MODS];  /* on / off as chosen, whate
 static unsigned char s_saved[BO3_MODFS_MAX_MODS];   /* what the mod list says (read at each build and APPLY) */
 static int s_save_failed;                  /* the last APPLY could not save every choice */
 
+/* Made by the build (cmake/modsmenu_marks.cmake): 1 when the generated code
+ * calls si_items, si_select, mm_flow_sel and mm_flow_back where
+ * config/patches.json puts them. */
+extern int bo3_modsmenu_gen_marks(void);
+static int s_flow;                         /* both marks generated and reaching this file's functions */
+static int s_probing, s_probed;            /* bo3_modsmenu_start calls each mark once: bits 1, 2 */
+
 static int mm_on(void)
 {
-    return g_xbox_mem_offset && !s_hidden && bo3_modfs_folder_count() > 0;
+    return s_flow && g_xbox_mem_offset && !s_hidden && bo3_modfs_folder_count() > 0;
 }
 
 static uint32_t label_va(int i) { return s_blk + MAX_LINES * 8 + (uint32_t)i * LABEL_CH * 2; }
@@ -461,6 +468,10 @@ static void mm_items(void)
 static void mm_flow_sel(void)
 {
     uint32_t lo, hi;
+    if (s_probing) {
+        s_probed |= 1;
+        return;
+    }
     if (!mm_on())
         return;
     if (s_mode && s_page_pending >= 0) {     /* a page change on the MODS page */
@@ -491,6 +502,10 @@ static void mm_flow_sel(void)
 static void mm_flow_back(void)
 {
     uint32_t lo, hi;
+    if (s_probing) {
+        s_probed |= 2;
+        return;
+    }
     if (!mm_on() || !s_mode)
         return;
     if (!own_hash(&lo, &hi)) {
@@ -597,4 +612,22 @@ void bo3_modsmenu_start(void)
     s_save_failed = 0;
     recomp_patch_on_mark("mm_flow_sel", mm_flow_sel);
     recomp_patch_on_mark("mm_flow_back", mm_flow_back);
+    /* MODS is listed only with its marks in the generated code and the two
+     * flow marks reaching mm_flow_*: the toolkit calls the first function
+     * registered for a name and drops a registration past its table (and
+     * menuentry.c registers si_items and si_select before these). Without
+     * them A on MODS would reach the title's four-entry next-page table. */
+    s_probing = 1;
+    s_probed = 0;
+    recomp_patch_mark("mm_flow_sel");
+    recomp_patch_mark("mm_flow_back");
+    s_probing = 0;
+    {
+        int gen = bo3_modsmenu_gen_marks();
+        s_flow = gen && s_probed == 3;
+        if (!s_flow)
+            fprintf(stderr, "[MODS] the MODS page is not listed: %s\n",
+                    !gen ? "the generated code lacks its marks (run regen.sh and build again)"
+                         : "its marks reach other functions, or the toolkit's mark table is full");
+    }
 }

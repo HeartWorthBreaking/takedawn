@@ -45,10 +45,15 @@ static int s_overlay, s_overlay_opens;
 int xbox_OverlayAvailable(void) { return s_overlay; }
 int xbox_OverlayRequestOpen(void) { s_overlay_opens++; return 1; }
 
+/* The toolkit's marks (src/platform/recomp_patch.c): the first function
+ * registered for a name is the one called; past its table a registration is
+ * dropped (s_mark_room plays a table with that much room left). */
 static struct { const char *name; void (*fn)(void); } s_marks[16];
-static int s_nmarks;
+static int s_nmarks, s_mark_room = 16;
 void recomp_patch_on_mark(const char *name, void (*fn)(void))
 {
+    if (s_nmarks == s_mark_room)
+        return;
     s_marks[s_nmarks].name = name;
     s_marks[s_nmarks++].fn = fn;
 }
@@ -60,6 +65,16 @@ static void mark(const char *name)
             return;
         }
 }
+void recomp_patch_mark(const char *name) { mark(name); }
+
+/* The generated code: whether the build found the two flow marks in it
+ * (cmake/modsmenu_marks.cmake makes this function for the game), and whether
+ * the title played here calls them (generated code older than the marks:
+ * event 5 changes state without them). */
+static int s_gen_marks = 1, s_title_marks = 1;
+int bo3_modsmenu_gen_marks(void) { return s_gen_marks; }
+static int s_other_flow;
+static void other_flow(void) { s_other_flow++; }   /* another file's function for mm_flow_sel */
 
 /* ---- the title ---- */
 #define PAGE     0x0055ABC4u
@@ -288,7 +303,8 @@ static void event5(const char *markname, uint32_t lo, uint32_t hi, int line_chos
     PUSH32(g_esp, hi);
     PUSH32(g_esp, lo);
     g_eax = (uint32_t)line_chosen;
-    mark(markname);
+    if (s_title_marks)
+        mark(markname);
     if (M32(g_esp) == SETTINGS_LO && M32(g_esp + 4) == SETTINGS_HI) {
         /* the current state's own: sub_000146E0 does nothing */
     } else {
@@ -1107,6 +1123,99 @@ int main(void)
         press_b();
     }
     CHECK(!s_guard_bad, "every heap block, the page object and the widget guards intact at the end");
+
+    /* ---- the generated code without the flow marks ---- */
+    /* A build from generated code made before config/patches.json had
+     * mm_flow_sel / mm_flow_back (no regen.sh): the build says so, and the
+     * title's event 5 changes state without them. MODS is never listed, and
+     * every line is the title's or menuentry.c's, as before the page. */
+    s_gen_marks = 0;
+    s_title_marks = 0;
+    start(at("empty"));
+    title_init();
+    enter_settings();
+    CHECK(s_widget_count == 4 && s_widget_items == ITEMS && !bo3_modsmenu_mode() && find_line("MODS") < 0,
+          "stale generated code: no MODS, the title's 4 lines and its own items (%u)", s_widget_count);
+    for (int i = 0; i < 3; i++) {
+        title_init();
+        enter_settings();
+        cursor_to(i);
+        press_a();
+        CHECK(s_left_settings && !s_out_of_range, "stale generated code: A on line %d is the title's, in its table", i);
+    }
+    s_overlay = 1;
+    title_init();
+    enter_settings();
+    CHECK(s_widget_count == 5 && !strcmp(line(4), "TAKEDAWN SETTINGS") && find_line("MODS") < 0,
+          "stale generated code, with the overlay: TAKEDAWN SETTINGS only (%u lines)", s_widget_count);
+    cursor_to(4);
+    {
+        int opens = s_overlay_opens;
+        press_a();
+        CHECK(s_overlay_opens == opens + 1 && !s_left_settings && !s_out_of_range,
+              "stale generated code: TAKEDAWN SETTINGS still opens the overlay");
+    }
+    s_overlay = 0;
+    /* The marks generated, but not reaching this file: registered for the
+     * name before it (the toolkit calls the first), or the table full. */
+    s_gen_marks = 1;
+    s_title_marks = 1;
+    {
+        int other;
+        /* room: -1 none taken; else the slots left after menuentry.c's */
+        struct { int room; int shadow; const char *what; } k[] = {
+            { -1, 1, "mm_flow_sel registered before the page" },
+            { 0, 0, "the mark table full before mm_flow_sel" },
+            { 1, 0, "the mark table full before mm_flow_back" },
+        };
+        for (size_t c = 0; c < sizeof k / sizeof k[0]; c++) {
+            SETENV("TAKEDAWN_MODS", at("empty"));
+            bo3_modfs_init();
+            s_nmarks = 0;
+            s_other_flow = 0;
+            if (k[c].shadow)
+                recomp_patch_on_mark("mm_flow_sel", other_flow);
+            bo3_menu_entry_start();
+            other = s_nmarks;
+            if (k[c].room >= 0)
+                s_mark_room = other + k[c].room;
+            bo3_modsmenu_start();
+            CHECK(s_nmarks == (k[c].room >= 0 ? other + k[c].room : other + 2),
+                  "%s: %d of the page's 2 marks registered", k[c].what, s_nmarks - other);
+            title_init();
+            enter_settings();
+            CHECK(find_line("MODS") < 0 && s_widget_count == 4 && !bo3_modsmenu_mode(),
+                  "%s: no MODS (%d marks before the page)", k[c].what, other);
+            if (k[c].shadow)
+                CHECK(s_other_flow == 1, "the other function was called once, at the page's start (%d)", s_other_flow);
+            s_mark_room = 16;
+        }
+    }
+    /* Negative control: the page as it was before this guard (it listed MODS
+     * whatever the generated code was; here, a build claiming the marks)
+     * with a title whose generated code lacks them: A on MODS reaches the
+     * title's table past its four entries. The guard is what stops it. */
+    s_gen_marks = 1;
+    s_title_marks = 0;
+    start(at("empty"));
+    title_init();
+    enter_settings();
+    CHECK(s_widget_count == 5 && !strcmp(line(4), "MODS"), "negative control: an unguarded build lists MODS");
+    cursor_to(4);
+    press_a();
+    CHECK(s_out_of_range && s_left_settings && !bo3_modsmenu_mode(),
+          "negative control: without the marks A on MODS reads past the title's table (detected)");
+    /* Generated again: as before. */
+    s_title_marks = 1;
+    s_out_of_range = 0;
+    start(at("empty"));
+    title_init();
+    enter_settings();
+    cursor_to(4);
+    press_a();
+    CHECK(bo3_modsmenu_mode() && !s_left_settings && !s_out_of_range, "the marks generated again: MODS opens the page");
+    press_b();
+    CHECK(!bo3_modsmenu_mode() && M16(CURSOR) == 4, "and B returns to MODS");
 
     start(NULL);
     printf("modsmenu: %d passed, %d failed\n", s_pass, s_fail);
