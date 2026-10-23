@@ -69,8 +69,8 @@ static void fit(char *buf, size_t n, const char *fmt, ...)
 /* ---- the folders ---- */
 
 static char s_root[512];
-static char s_made[4096][700];  /* made, removed in reverse at the end */
-static int  s_kind[4096];       /* 0 file, 1 folder, 2 link (or junction), 3 folder chmod 000 */
+static char s_made[8192][700];  /* made, removed in reverse at the end */
+static int  s_kind[8192];       /* 0 file, 1 folder, 2 link (or junction), 3 folder chmod 000 */
 static int  s_nmade;
 
 static const char *at(const char *rel)
@@ -805,6 +805,345 @@ static void manifests(int sensitive)
     CHECK(bo3_modfs_mod_count() == 0, "unset: no mods listed");
 }
 
+/* ---- the mod list: mods on and off, conflicts ---- */
+
+static const char *read_text(const char *path)
+{
+    static char b[2][1024];
+    static int k;
+    char *o = b[k++ & 1];
+    FILE *f = fopen(path, "rb");
+    size_t got = 0;
+    if (f) {
+        got = fread(o, 1, sizeof b[0] - 1, f);
+        fclose(f);
+    }
+    o[got] = 0;
+    return f ? o : NULL;
+}
+
+static int write_text(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return 0;
+    fputs(text, f);
+    fclose(f);
+    return 1;
+}
+
+static const bo3_mod *mod_by_id(const char *id)
+{
+    for (int i = 0; i < bo3_modfs_mod_count(); i++)
+        if (!strcmp(bo3_modfs_mod(i)->manifest.id, id))
+            return bo3_modfs_mod(i);
+    return NULL;
+}
+
+/* set_mods with stderr captured into log. */
+static void init_logged(const char *list, char *log, size_t n)
+{
+    char path[700];
+    fit(path, sizeof path, "%s", at("modlist_log.txt"));
+    if (capture_start(path)) {
+        set_mods(list);
+        capture_end(path, log, n);
+    } else {
+        set_mods(list);
+        log[0] = 0;
+    }
+}
+
+static int s_toggle_bad[THREADS];
+static void toggle_body(int k)
+{
+    static const char *const ids[] = { "t.a", "t.b", "t.c", "t.d" };
+    for (int i = 0; i < 200; i++) {
+        if (k < 4) {
+            if (!bo3_modfs_set_enabled(ids[k], i & 1))
+                s_toggle_bad[k]++;
+        } else if (strcmp(read_back("D:\\Data\\x.bin"), "one") != 0) {
+            s_toggle_bad[k]++;   /* this session does not change */
+        }
+    }
+}
+#if defined(_WIN32)
+static unsigned __stdcall toggle_main(void *a) { toggle_body((int)(intptr_t)a); return 0; }
+#else
+static void *toggle_main(void *a) { toggle_body((int)(intptr_t)a); return NULL; }
+#endif
+
+static void mod_list(void)
+{
+    static const char ok_toml[] = "id = \"%s\"\nname = \"%s\"\n";
+    char t[256], list[1600], state[700], log[16384];
+    const bo3_mod *m;
+
+    fit(t, sizeof t, ok_toml, "b.one", "One");
+    CHECK(make_file("lb/m1/mod.toml", t) && make_file("lb/m1/files/Data/x.bin", "one")
+          && make_file("lb/m1/files/Data/only1.bin", "only one"), "setup b.one");
+    fit(t, sizeof t, ok_toml, "b.two", "Two");
+    CHECK(make_file("lb/m2/mod.toml", t) && make_file("lb/m2/files/Data/x.bin", "two")
+          && make_file("lb/m2/files/Data/y.bin", "two y"), "setup b.two");
+    CHECK(make_file("lb/Data/y.bin", "loose y"), "setup loose y");
+    fit(t, sizeof t, ok_toml, "b.three", "Three");
+    CHECK(make_file("lb2/m3/mod.toml", t) && make_file("lb2/m3/files/Data/x.bin", "three"), "setup b.three");
+    CHECK(make_dir(at("state")), "setup state folder");
+    fit(state, sizeof state, "%s", at("state/mod-list.toml"));
+    remember(state, 0);
+    {
+        char p[720];
+        fit(p, sizeof p, "%s.bad", state);
+        remember(p, 0);
+        fit(p, sizeof p, "%s.tmp", state);
+        remember(p, 0);
+    }
+    fit(list, sizeof list, "%s;%s", at("lb"), at("lb2"));
+    bo3_modfs_state_file(state);
+
+    /* No file: every mod on (as without the mod list); the order of A. */
+    init_logged(list, log, sizeof log);
+    CHECK(!strcmp(read_back("D:\\Data\\x.bin"), "one") && !strcmp(read_back("D:\\Data\\y.bin"), "loose y"),
+          "no mod list: every mod on, loose first, then by id");
+    CHECK((m = mod_by_id("b.one")) && m->enabled && m->usable, "b.one on");
+    CHECK(!read_text(state), "nothing written at the start");
+    CHECK(bo3_modfs_conflicts() == 2, "two files with more than one source (%d)", bo3_modfs_conflicts());
+    CHECK(strstr(log, "[MOD] conflict: data/x.bin: mod b.one over mod b.two, mod b.three\n")
+          && strstr(log, "[MOD] conflict: data/y.bin: folder 1 over mod b.two\n"), "conflict lines:\n%s", log);
+    CHECK((m = mod_by_id("b.one")) && m->wins == 1 && m->loses == 0 && (m = mod_by_id("b.two")) && m->wins == 0
+          && m->loses == 2 && (m = mod_by_id("b.three")) && m->loses == 1, "wins / loses per mod");
+
+    /* Off: saved at once, used from the next start. */
+    CHECK(bo3_modfs_set_enabled("b.one", 0), "b.one off: saved");
+    CHECK(read_text(state) && strstr(read_text(state), "disabled = [\"b.one\"]"), "the file: %s", read_text(state));
+    CHECK(bo3_modfs_enabled_next("b.one") == 0 && bo3_modfs_enabled_next("b.two") == 1, "next start: b.one off");
+    CHECK(!strcmp(read_back("D:\\Data\\x.bin"), "one") && mod_by_id("b.one")->enabled, "this session unchanged");
+    CHECK(bo3_modfs_set_enabled("b.one", 0), "off again: nothing to change, still 1");
+    init_logged(list, log, sizeof log);
+    CHECK(!strcmp(read_back("D:\\Data\\x.bin"), "two") && refused("D:\\Data\\only1.bin"), "after a restart: b.one's files not used");
+    CHECK((m = mod_by_id("b.one")) && !m->enabled && m->usable && m->wins == 0, "b.one listed, off");
+    CHECK(strstr(log, "[MOD] mod b.one: ") && strstr(log, " (off)\n"), "log says off:\n%s", log);
+    CHECK(refused("D:\\m1\\mod.toml") && refused("D:\\m1\\files\\Data\\x.bin"), "an off mod's folder is still not loose files");
+    CHECK(bo3_modfs_conflicts() == 2 && strstr(log, "data/x.bin: mod b.two over mod b.three"), "conflicts without b.one:\n%s", log);
+    CHECK(bo3_modfs_set_enabled("b.one", 1) && strstr(read_text(state), "disabled = []"), "b.one on again: %s", read_text(state));
+    set_mods(list);
+    CHECK(!strcmp(read_back("D:\\Data\\x.bin"), "one"), "on again after a restart");
+
+    /* Ids: invalid ones refused; ids of mods that are not there kept. */
+    CHECK(!bo3_modfs_set_enabled("Bad Id", 0) && !bo3_modfs_set_enabled("", 0) && !bo3_modfs_set_enabled(NULL, 0),
+          "an invalid id is refused");
+    CHECK(bo3_modfs_set_enabled("not.installed", 0) && bo3_modfs_set_enabled("b.two", 0), "an id not installed: saved");
+    set_mods(list);
+    CHECK(bo3_modfs_enabled_next("not.installed") == 0 && !mod_by_id("b.two")->enabled, "kept across a restart");
+    CHECK(bo3_modfs_set_enabled("b.two", 1) && strstr(read_text(state), "\"not.installed\"")
+          && !strstr(read_text(state), "b.two"), "kept when the file is written again: %s", read_text(state));
+    CHECK(bo3_modfs_set_enabled("not.installed", 1), "cleanup");
+
+    /* A file that cannot be used: every mod on, a notice, and kept as .bad
+     * before the first write. */
+    {
+        static const char *const bad[][2] = {
+            { "disabled = [\"b.one\"", "not TOML" },
+            { "disabled = \"b.one\"\n", "a string, not a list" },
+            { "disabled = [\"b.one\\u0000x\"]\n", "\\u0000" },
+            { "[disabled]\nx = 1\n", "a table" },
+        };
+        for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            CHECK(write_text(state, bad[i][0]), "write bad file");
+            init_logged(list, log, sizeof log);
+            CHECK(!strcmp(read_back("D:\\Data\\x.bin"), "one") && mod_by_id("b.one")->enabled
+                  && strstr(log, "[MOD] mod list not used ("), "%s: every mod on, a notice:\n%s", bad[i][1], log);
+        }
+        CHECK(bo3_modfs_set_enabled("b.three", 0), "a write after a bad file");
+        {
+            char p[720];
+            fit(p, sizeof p, "%s.bad", state);
+            CHECK(read_text(p) && !strcmp(read_text(p), bad[3][0]), "the bad file kept as .bad: %s", read_text(p));
+        }
+        CHECK(strstr(read_text(state), "disabled = [\"b.three\"]"), "the new file: %s", read_text(state));
+        CHECK(bo3_modfs_set_enabled("b.three", 1), "cleanup");
+    }
+    CHECK(write_text(state, "# hand-edited\ndisabled = [\"b.one\", 5, \"Bad\", \"b.one\", \"zz.gone\"]\nother = 1\n"),
+          "write a mixed file");
+    init_logged(list, log, sizeof log);
+    CHECK(!mod_by_id("b.one")->enabled && bo3_modfs_enabled_next("zz.gone") == 0
+          && strstr(log, "[MOD] mod list: 2 entries that are not mod ids skipped"), "entries that are not ids skipped:\n%s", log);
+    {
+        static char big[70 * 1024];
+        memset(big, '#', sizeof big - 1);
+        big[0] = '\n';
+        CHECK(write_text(state, big), "write a large file");
+        init_logged(list, log, sizeof log);
+        CHECK(mod_by_id("b.one")->enabled && strstr(log, "larger than 65536 bytes"), "larger than 64 KiB: not used:\n%s", log);
+    }
+    CHECK(write_text(state, "disabled = []\n"), "reset the file");
+    set_mods(list);
+
+    /* A write that fails leaves the file and the list as they were. */
+    {
+        char p[720];
+        fit(p, sizeof p, "%s.tmp", state);
+        CHECK(make_dir(p), "a folder where the temporary file goes");
+        CHECK(!bo3_modfs_set_enabled("b.two", 0), "the write fails");
+        CHECK(!strcmp(read_text(state), "disabled = []\n") && bo3_modfs_enabled_next("b.two") == 1,
+              "file and list as they were: %s", read_text(state));
+#if defined(_WIN32)
+        _rmdir(p);
+#else
+        rmdir(p);
+#endif
+    }
+
+    /* No file named: every mod on, nothing can be saved. */
+    bo3_modfs_state_file(NULL);
+    set_mods(list);
+    CHECK(!bo3_modfs_set_enabled("b.one", 0) && mod_by_id("b.one")->enabled, "no mod list file: nothing saved");
+
+    /* Without mods the file is not read (the no-mod path). */
+    bo3_modfs_state_file(state);
+    CHECK(write_text(state, "not toml at all [[["), "write a bad file");
+    CHECK(make_dir(at("nomods")), "setup nomods");
+    init_logged(at("nomods"), log, sizeof log);
+    CHECK(!strstr(log, "mod list") && bo3_modfs_mod_count() == 0, "no mods: the mod list is not read:\n%s", log);
+    init_logged(NULL, log, sizeof log);
+    CHECK(!strstr(log, "mod list") && !log[0], "unset: nothing at all:\n%s", log);
+    CHECK(write_text(state, "disabled = []\n"), "reset the file");
+
+    /* Threads: four save while four look files up; this session does not
+     * change, and the file ends as the last calls left it. */
+    set_mods(list);
+    run_threads(toggle_main);
+    {
+        int bad = 0;
+        for (int k = 0; k < THREADS; k++)
+            bad += s_toggle_bad[k];
+        CHECK(!bad, "threads: %d failed saves or changed answers", bad);
+        CHECK(!strstr(read_text(state), "\"t.") && bo3_modfs_enabled_next("t.a"), "threads: every id on at the end: %s",
+              read_text(state));
+    }
+
+    /* Many conflicts: 32 lines, then a count. */
+    fit(t, sizeof t, ok_toml, "c.first", "First");
+    CHECK(make_file("lc/c1/mod.toml", t), "setup c1");
+    fit(t, sizeof t, ok_toml, "c.second", "Second");
+    CHECK(make_file("lc/c2/mod.toml", t), "setup c2");
+    for (int i = 0; i < 40; i++) {
+        char rel[64];
+        fit(rel, sizeof rel, "lc/c1/files/Data/f%02d.bin", i);
+        CHECK(make_file(rel, "first"), "setup c1 file");
+        fit(rel, sizeof rel, "lc/c2/files/Data/f%02d.bin", i);
+        CHECK(make_file(rel, "second"), "setup c2 file");
+    }
+    init_logged(at("lc"), log, sizeof log);
+    {
+        int lines = 0;
+        for (const char *p = log; (p = strstr(p, "[MOD] conflict: ")); p++)
+            lines++;
+        CHECK(bo3_modfs_conflicts() == 40 && lines == 32 && strstr(log, "[MOD] ... and 8 more conflicts"),
+              "40 conflicts: %d lines and a count", lines);
+        CHECK(mod_by_id("c.first")->wins == 40 && mod_by_id("c.second")->loses == 40, "counts");
+    }
+    /* More files than are walked for: mod against mod still told, loose not. */
+    CHECK(make_file("lc/Data/f00.bin", "loose"), "setup loose f00");
+    for (int i = 0; i < 1030; i++) {
+        char rel[64];
+        fit(rel, sizeof rel, "lc/c2/files/Many/m%04d.bin", i);
+        CHECK(make_file(rel, "m"), "setup many");
+    }
+    init_logged(at("lc"), log, sizeof log);
+    CHECK(strstr(log, "conflicts with loose files and with mods looked up on disk not looked for")
+          && strstr(log, "data/f00.bin: mod c.first over mod c.second\n") && bo3_modfs_conflicts() == 40,
+          "over the walk limit:\n%.600s", log);
+
+    /* Without mods the list is read when asked, so saving keeps its ids. */
+    CHECK(write_text(state, "disabled = [\"keep.one\", \"keep.two\"]\n"), "write a list");
+    set_mods(at("nomods"));
+    CHECK(bo3_modfs_enabled_next("keep.one") == 0, "no mods: enabled_next reads the list");
+    CHECK(bo3_modfs_set_enabled("new.id", 0) && strstr(read_text(state), "\"keep.one\", \"keep.two\", \"new.id\""),
+          "no mods: a save keeps the ids already there: %s", read_text(state));
+    set_mods(NULL);
+    CHECK(bo3_modfs_set_enabled("new.id", 1) && strstr(read_text(state), "\"keep.two\"]"), "unset: the same: %s",
+          read_text(state));
+
+    /* A bad file and a failing write: the file stays, no .bad. */
+    {
+        char p[720], b[720];
+        fit(p, sizeof p, "%s.tmp", state);
+        fit(b, sizeof b, "%s.bad", state);
+        remove(b);
+        CHECK(write_text(state, "broken [[["), "write a bad file");
+        set_mods(list);
+        CHECK(make_dir(p), "a folder where the temporary file goes");
+        CHECK(!bo3_modfs_set_enabled("b.one", 0), "the write fails");
+        CHECK(!strcmp(read_text(state), "broken [[[") && !read_text(b), "the bad file stays where it was, no .bad");
+#if defined(_WIN32)
+        _rmdir(p);
+#else
+        rmdir(p);
+#endif
+        /* A link planted at the temporary name is not written through. */
+        CHECK(write_text(at("victim.txt"), "victim"), "setup victim");
+        remember(at("victim.txt"), 0);
+#if defined(_WIN32)
+        if (CreateHardLinkA(p, at("victim.txt"), NULL)) {
+#else
+        if (link(at("victim.txt"), p) == 0) {
+#endif
+            CHECK(bo3_modfs_set_enabled("b.one", 0), "a save with a hard link at the temporary name");
+            CHECK(!strcmp(read_text(at("victim.txt")), "victim") && strstr(read_text(state), "\"b.one\""),
+                  "the linked file untouched: %s", read_text(at("victim.txt")));
+            CHECK(read_text(b) && !strcmp(read_text(b), "broken [[["), "the bad file kept as .bad");
+        } else {
+            SKIP("hard link at the temporary name: not supported here");
+        }
+        CHECK(write_text(state, "disabled = []\n"), "reset the file");
+    }
+
+    /* The conflict report names the place a lookup uses, also when a listed
+     * file is refused by the walk (a host path too long for one mod). */
+    {
+        char rel[700], name[300], base[700];
+        size_t room;
+        fit(base, sizeof base, "%s", at("lw"));
+        fit(t, sizeof t, ok_toml, "a.long", "Long");
+        fit(rel, sizeof rel, "lw/%s/mod.toml", "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllll");
+        CHECK(make_file(rel, t), "setup a.long");
+        fit(t, sizeof t, ok_toml, "b.short", "Short");
+        CHECK(make_file("lw/b/mod.toml", t), "setup b.short");
+        /* a.long's host path 257 characters: over the 255 a lookup takes on
+         * Windows, while b's fits */
+        room = 257 - (strlen(base) + 1 + 60 + sizeof "\\files\\Data\\" - 1);
+        if (room > 4 && room < 200) {
+            memset(name, 'n', room - 4);
+            memcpy(name + room - 4, ".bin", 5);
+            fit(rel, sizeof rel, "lw/%s/files/Data/%s", "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllll", name);
+            CHECK(make_file(rel, "long"), "setup long file");
+            fit(rel, sizeof rel, "lw/b/files/Data/%s", name);
+            CHECK(make_file(rel, "short"), "setup short file");
+            init_logged(at("lw"), log, sizeof log);
+            fit(rel, sizeof rel, "D:\\Data\\%s", name);
+            if (!strcmp(read_back(rel), "short"))
+                CHECK(bo3_modfs_conflicts() == 0 && !strstr(log, "[MOD] conflict"), "b.short used: no conflict told:\n%s", log);
+            else
+                CHECK(!strcmp(read_back(rel), "long") && bo3_modfs_conflicts() == 1 && strstr(log, "mod a.long over mod b.short"),
+                      "a.long used: told so:\n%s", log);
+        } else {
+            SKIP("the temporary folder's path does not leave room for the long-path case");
+        }
+    }
+
+    /* A mod list path too long for the buffer: none, said so. */
+    {
+        static char longp[1300];
+        memset(longp, 'p', sizeof longp - 1);
+        fit(log, sizeof log, "%s", "");
+        bo3_modfs_state_file(longp);
+        CHECK(!bo3_modfs_set_enabled("b.one", 0), "a path too long: no mod list");
+    }
+
+    bo3_modfs_state_file(NULL);
+}
+
 int main(void)
 {
     char list[4096];
@@ -1277,6 +1616,7 @@ int main(void)
     }
 
     manifests(sensitive);
+    mod_list();
 
     remove_all();
     printf("modfs: %d passed, %d failed, %d skipped\n", s_pass, s_fail, s_skip);

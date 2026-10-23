@@ -95,6 +95,11 @@ static int is_table(char *buf, size_t n, const char *key)
     return cfg == NULL;
 }
 
+int bo3_manifest_id_ok(const char *id)
+{
+    return id && *id && strlen(id) <= BO3_MOD_ID_MAX && id_ok(id);
+}
+
 static const field s_fields[] = {
     { "id",          offsetof(bo3_manifest, id),          BO3_MOD_ID_MAX,      1, id_ok },
     { "name",        offsetof(bo3_manifest, name),        BO3_MOD_NAME_MAX,    1, NULL },

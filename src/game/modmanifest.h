@@ -32,4 +32,7 @@ typedef struct bo3_manifest {
  * format or markup. Reads no file. */
 int bo3_manifest_parse(const char *text, size_t n, bo3_manifest *out, char *err, size_t errn);
 
+/* 1 when id is a valid mod id (the rule above, 1 to BO3_MOD_ID_MAX bytes). */
+int bo3_manifest_id_ok(const char *id);
+
 #endif

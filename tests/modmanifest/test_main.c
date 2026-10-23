@@ -95,6 +95,20 @@ static void accepted(void)
     }
 }
 
+static void id_rule(void)
+{
+    char long_id[BO3_MOD_ID_MAX + 2];
+    memset(long_id, 'a', sizeof long_id - 1);
+    long_id[sizeof long_id - 1] = 0;
+    CHECK(bo3_manifest_id_ok("a") && bo3_manifest_id_ok("example.car-pack_2") && bo3_manifest_id_ok("0x"),
+          "bo3_manifest_id_ok: valid ids");
+    CHECK(!bo3_manifest_id_ok(NULL) && !bo3_manifest_id_ok("") && !bo3_manifest_id_ok("A") && !bo3_manifest_id_ok(".a")
+          && !bo3_manifest_id_ok("a b") && !bo3_manifest_id_ok("a\"b") && !bo3_manifest_id_ok(long_id),
+          "bo3_manifest_id_ok: invalid ids");
+    long_id[BO3_MOD_ID_MAX] = 0;
+    CHECK(bo3_manifest_id_ok(long_id), "bo3_manifest_id_ok: 64 bytes");
+}
+
 static void rejected(void)
 {
     BAD("", "empty");
@@ -262,6 +276,7 @@ int main(void)
 {
     accepted();
     rejected();
+    id_rule();
     mutations();
     printf("modmanifest: %d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;

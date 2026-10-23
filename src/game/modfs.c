@@ -58,7 +58,9 @@
  * files first (as before manifests), then its mods by id. A mod's subfolder is
  * not part of its folder's loose files. A file's path through a mod is
  * checked by the same walk as a loose file's (mod_file), from the mod folder
- * down, so the mod's own folder and files/ follow the same rules. Without
+ * down, so the mod's own folder and files/ follow the same rules. A mod the
+ * mod list (mod-list.toml, below) names as off has no place in that order.
+ * Without
  * manifests the same files are read as before; the log only adds a line for
  * a folder that has too many entries to be searched for mods.
  */
@@ -80,6 +82,7 @@
 #include "kernel.h"   /* xbox_PathRedirectHook */
 #include "platform/xr_log.h"   /* XR_NOTICE; the print gate (also force-included) */
 #include "modfs.h"
+#include "recomp_cfg.h"   /* the mod list */
 
 /* The longest host path handed back is MODFS_HOST_MAX - 1 characters. The
  * toolkit gives a path no rule claims to the host as it is (kernel_path.c,
@@ -140,15 +143,23 @@ static source s_src[MODFS_MAX_DIRS + BO3_MODFS_MAX_MODS];
 static int   s_nsrc;
 static char  s_seen[MODFS_SEEN][160];
 static int   s_nseen;
+/* s_lock: the log-once list (lookups). s_state_lock: the mod list (its own,
+ * so that saving it never holds a lookup up). */
 #if defined(_WIN32)
-static CRITICAL_SECTION s_lock;
-static int   s_lock_made;
+static CRITICAL_SECTION s_lock, s_state_lock;
+static int   s_lock_made;   /* both made by the first bo3_modfs_init */
 #define MODFS_LOCK()   EnterCriticalSection(&s_lock)
 #define MODFS_UNLOCK() LeaveCriticalSection(&s_lock)
+#define STATE_LOCK()   EnterCriticalSection(&s_state_lock)
+#define STATE_UNLOCK() LeaveCriticalSection(&s_state_lock)
 #else
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t s_state_lock = PTHREAD_MUTEX_INITIALIZER;
+static const int s_lock_made = 1;
 #define MODFS_LOCK()   pthread_mutex_lock(&s_lock)
 #define MODFS_UNLOCK() pthread_mutex_unlock(&s_lock)
+#define STATE_LOCK()   pthread_mutex_lock(&s_state_lock)
+#define STATE_UNLOCK() pthread_mutex_unlock(&s_state_lock)
 #endif
 /* Per thread: several threads open files at once, and the caller copies the
  * path before its next translation on the same thread. */
@@ -1063,6 +1074,310 @@ static void add_mod_source(int r, int i)
     s_nsrc++;
 }
 
+/* ── The mod list: which mods are off ───────────────────────────────────
+ * mod-list.toml (bo3_modfs_state_file), in the player's settings folder,
+ * never in a mod folder: disabled = ["id", ...]. A mod it does not name is
+ * on, so no file means every mod on. Ids of mods that are not there stay in
+ * it. Read at the start when there is a mod, else at the first call that
+ * needs it; written whole when bo3_modfs_set_enabled changes it: to a new
+ * temporary file, flushed, then renamed over it. Guarded by its own lock,
+ * so a save never holds up a lookup. */
+#define MODFS_STATE_MAX  (64 * 1024)
+#define MODFS_STATE_PATH 1100
+
+static char s_state[MODFS_STATE_PATH];                      /* "" none */
+static char s_off[BO3_MODFS_MAX_OFF][BO3_MOD_ID_MAX + 1];   /* off from the next start */
+static char s_off_undo[BO3_MODFS_MAX_OFF][BO3_MOD_ID_MAX + 1];
+static int  s_noff;
+static int  s_state_read;  /* 1 read (or there is none), 0 not yet, -1 could not be read: tried again when needed */
+static int  s_state_bad;   /* there, but not a mod list: moved to .bad by the first write */
+static int  s_state_said;  /* "cannot be read" logged this session */
+
+static int is_off(const char *id)
+{
+    for (int i = 0; id[0] && i < s_noff; i++)
+        if (!strcmp(s_off[i], id))
+            return 1;
+    return 0;
+}
+
+#if defined(_WIN32)
+/* The settings folder's path is UTF-8 (the player's name can be in it). */
+static int widen(const char *s, wchar_t *w)
+{
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, w, MODFS_STATE_PATH + 8) > 0;
+}
+
+/* 1 read, 0 no such file, -1 could not be read now, -2 not a mod list (not a
+ * plain file, or larger than MODFS_STATE_MAX). */
+static int state_read(const char *path, char **text, size_t *n)
+{
+    wchar_t w[MODFS_STATE_PATH + 8];
+    LARGE_INTEGER size;
+    DWORD got;
+    HANDLE h;
+    int r = -2;
+
+    *text = NULL;
+    *n = 0;
+    if (!widen(path, w))
+        return -1;
+    h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? 0 : -1;
+    }
+    if (GetFileType(h) == FILE_TYPE_DISK && GetFileSizeEx(h, &size) && size.QuadPart <= MODFS_STATE_MAX) {
+        r = -1;
+        if ((*text = malloc((size_t)size.QuadPart + 1)) != NULL) {
+            while (*n < (size_t)size.QuadPart
+                   && ReadFile(h, *text + *n, (DWORD)((size_t)size.QuadPart - *n), &got, NULL) && got)
+                *n += got;
+            r = *n == (size_t)size.QuadPart ? 1 : -1;
+        }
+    }
+    CloseHandle(h);
+    return r;
+}
+
+/* path made anew (an old one, or a link planted there, removed first) with
+ * text, flushed to the disk. */
+static int state_new_file(const char *path, const char *text, size_t n)
+{
+    wchar_t w[MODFS_STATE_PATH + 8];
+    DWORD put;
+    HANDLE h;
+    int ok;
+
+    if (!widen(path, w))
+        return 0;
+    SetFileAttributesW(w, FILE_ATTRIBUTE_NORMAL);   /* a read-only one left behind is removed too */
+    DeleteFileW(w);
+    h = CreateFileW(w, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    ok = WriteFile(h, text, (DWORD)n, &put, NULL) && put == n && FlushFileBuffers(h);
+    CloseHandle(h);
+    if (!ok)
+        DeleteFileW(w);
+    return ok;
+}
+
+/* from renamed over to. A virus scanner or an indexer holding either file for
+ * a moment is waited out (a few tries). missing_ok: no from is success. */
+static int state_move(const char *from, const char *to, int missing_ok)
+{
+    wchar_t wf[MODFS_STATE_PATH + 8], wt[MODFS_STATE_PATH + 8];
+    if (!widen(from, wf) || !widen(to, wt))
+        return 0;
+    for (int tries = 0; tries < 5; tries++) {
+        DWORD e;
+        if (MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return 1;
+        e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND)
+            return missing_ok;
+        if (e != ERROR_SHARING_VIOLATION && e != ERROR_ACCESS_DENIED && e != ERROR_LOCK_VIOLATION)
+            return 0;
+        Sleep(20);
+    }
+    return 0;
+}
+
+static void state_remove(const char *path)
+{
+    wchar_t w[MODFS_STATE_PATH + 8];
+    if (widen(path, w))
+        DeleteFileW(w);
+}
+#else
+static int state_read(const char *path, char **text, size_t *n)
+{
+    struct stat st;
+    ssize_t k;
+    int f = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC), r = -2;
+
+    *text = NULL;
+    *n = 0;
+    if (f < 0)
+        return errno == ENOENT || errno == ENOTDIR ? 0 : -1;
+    if (fstat(f, &st) == 0 && S_ISREG(st.st_mode) && st.st_size <= MODFS_STATE_MAX) {
+        r = -1;
+        if ((*text = malloc((size_t)st.st_size + 1)) != NULL) {
+            while (*n < (size_t)st.st_size && (k = read(f, *text + *n, (size_t)st.st_size - *n)) > 0)
+                *n += (size_t)k;
+            r = *n == (size_t)st.st_size ? 1 : -1;
+        }
+    }
+    close(f);
+    return r;
+}
+
+static int state_new_file(const char *path, const char *text, size_t n)
+{
+    size_t put = 0;
+    ssize_t k;
+    int f, ok;
+
+    unlink(path);   /* an old one, or a link planted there: O_EXCL makes a new file or fails */
+    f = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (f < 0)
+        return 0;
+    while (put < n && (k = write(f, text + put, n - put)) > 0)
+        put += (size_t)k;
+    ok = put == n && fsync(f) == 0;
+    ok = close(f) == 0 && ok;
+    if (!ok)
+        unlink(path);
+    return ok;
+}
+
+static int state_move(const char *from, const char *to, int missing_ok)
+{
+    char dir[MODFS_STATE_PATH];
+    const char *sl = strrchr(to, '/');
+    int f;
+
+    if (rename(from, to) != 0)
+        return errno == ENOENT && missing_ok;
+    snprintf(dir, sizeof dir, "%.*s", sl ? (sl == to ? 1 : (int)(sl - to)) : 1, sl ? to : ".");
+    if ((f = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC)) >= 0) {   /* the rename itself to the disk */
+        fsync(f);
+        close(f);
+    }
+    return 1;
+}
+
+static void state_remove(const char *path)
+{
+    unlink(path);
+}
+#endif
+
+/* A table key ([key] with keys in it, or key.x = ...): the reader names its
+ * keys, not the table. */
+static int has_table(const recomp_cfg *cfg, const char *key)
+{
+    size_t n = strlen(key);
+    for (size_t i = 0; i < recomp_cfg_count(cfg); i++) {
+        const char *k = recomp_cfg_key_at(cfg, i);
+        if (k && !strncmp(k, key, n) && k[n] == '.')
+            return 1;
+    }
+    return 0;
+}
+
+/* Under the mod list's lock. */
+static void read_state(void)
+{
+    char why[160], *text;
+    size_t n;
+    recomp_cfg *cfg = NULL;
+    recomp_cfg_type t;
+    int r, skipped = 0, over = 0;
+
+    s_noff = 0;
+    s_state_bad = 0;
+    s_state_read = 1;
+    if (!s_state[0])
+        return;
+    r = state_read(s_state, &text, &n);
+    if (r == 0)
+        return;
+    if (r == -1) {
+        if (!s_state_said)   /* once a session: it is tried again at each call */
+            XR_NOTICE("[MOD] mod list cannot be read (another program may have it open): %s: taken as every mod on; "
+                      "not saved until it can be read\n", s_state);
+        s_state_said = 1;
+        s_state_read = -1;
+        free(text);
+        return;
+    }
+    why[0] = 0;
+    if (r < 0)
+        snprintf(why, sizeof why, "not a file, or larger than %d bytes", MODFS_STATE_MAX);
+    else if ((text[n] = 0, memchr(text, 0, n)) || strstr(text, "\\u0000") || strstr(text, "\\U00000000"))
+        snprintf(why, sizeof why, "a NUL byte or \\u0000");
+    else if (!(cfg = recomp_cfg_load_string(text, "mod-list.toml", why, sizeof why)))
+        scrub(why);
+    else if ((t = recomp_cfg_type_of(cfg, "disabled")) != RCFG_NONE ? t != RCFG_ARRAY : has_table(cfg, "disabled"))
+        snprintf(why, sizeof why, "disabled must be a list of ids");
+    if (why[0] || !cfg) {
+        XR_NOTICE("[MOD] mod list not used (%s): %s: every mod is on\n", why[0] ? why : "not TOML", s_state);
+        s_state_bad = 1;
+    } else {
+        for (size_t i = 0; i < recomp_cfg_array_len(cfg, "disabled"); i++) {
+            const char *id = recomp_cfg_array_string(cfg, "disabled", i, "");
+            if (recomp_cfg_array_type(cfg, "disabled", i) != RCFG_STRING || !bo3_manifest_id_ok(id))
+                skipped++;
+            else if (is_off(id))
+                ;
+            else if (s_noff == BO3_MODFS_MAX_OFF)
+                over++;
+            else
+                memcpy(s_off[s_noff++], id, strlen(id) + 1);
+        }
+        if (skipped)
+            XR_NOTICE("[MOD] mod list: %d entries that are not mod ids skipped (dropped when it is saved): %s\n",
+                      skipped, s_state);
+        if (over)
+            XR_NOTICE("[MOD] mod list: more than %d ids, %d ignored (dropped when it is saved): %s\n",
+                      BO3_MODFS_MAX_OFF, over, s_state);
+    }
+    recomp_cfg_free(cfg);
+    free(text);
+}
+
+/* Under the mod list's lock: read when it was not (yet); 1 when it is known. */
+static int state_ready(void)
+{
+    if (s_state_read <= 0)
+        read_state();
+    return s_state_read > 0;
+}
+
+/* Under the mod list's lock. The old file stays until the new one is
+ * complete on the disk; one that was not a mod list is kept as .bad. */
+static int write_state(void)
+{
+    size_t cap = 128 + (size_t)s_noff * (BO3_MOD_ID_MAX + 4), n;
+    char *text = malloc(cap), tmp[MODFS_STATE_PATH + 8], bad[MODFS_STATE_PATH + 8];
+    int ok = 0, moved = 0;
+
+    if (!text)
+        goto out;
+    n = (size_t)snprintf(text, cap, "# Takedawn: mods that are off, by id (docs/mod-folders.md). Read at start.\n"
+                                    "disabled = [");
+    for (int i = 0; i < s_noff; i++)
+        n += (size_t)snprintf(text + n, cap - n, "%s\"%s\"", i ? ", " : "", s_off[i]);
+    n += (size_t)snprintf(text + n, cap - n, "]\n");
+    snprintf(tmp, sizeof tmp, "%s.tmp", s_state);
+    snprintf(bad, sizeof bad, "%s.bad", s_state);
+    if (!state_new_file(tmp, text, n))
+        goto out;
+    if (s_state_bad && !(moved = state_move(s_state, bad, 1))) {
+        state_remove(tmp);
+        goto out;
+    }
+    if (!state_move(tmp, s_state, 0)) {
+        state_remove(tmp);
+        if (moved && !state_move(bad, s_state, 0)) {   /* put it back: the file as it was */
+            XR_NOTICE("[MOD] mod list not saved, and the old one is left as %s.bad\n", s_state);
+            free(text);
+            return 0;
+        }
+        goto out;
+    }
+    s_state_bad = 0;
+    ok = 1;
+out:
+    if (!ok)
+        XR_NOTICE("[MOD] mod list not saved (it is as it was): %s\n", s_state);
+    free(text);
+    return ok;
+}
+
 static void list_mods(void)
 {
     /* A shared id refuses every copy: no order decides which one is used. */
@@ -1078,6 +1393,8 @@ static void list_mods(void)
                 s_mods[i].usable = s_mods[j].usable = 0;
             }
     qsort(s_mods, (size_t)s_nmods, sizeof s_mods[0], by_root_then_id);
+    for (int i = 0; i < s_nmods; i++)
+        s_mods[i].enabled = !is_off(s_mods[i].manifest.id);
     s_nsrc = 0;
     for (int r = 0; r < s_ndirs; r++) {
         if (s_dup[r])
@@ -1092,9 +1409,10 @@ static void list_mods(void)
             if (s_mods[i].root != r)
                 continue;
             if (s_mods[i].usable) {
-                add_mod_source(r, i);
-                XR_NOTICE("[MOD] mod %s%s%s: %s\n", s_mods[i].manifest.id, s_mods[i].manifest.version[0] ? " " : "",
-                          s_mods[i].manifest.version, s_mods[i].folder);
+                if (s_mods[i].enabled)
+                    add_mod_source(r, i);
+                XR_NOTICE("[MOD] mod %s%s%s: %s%s\n", s_mods[i].manifest.id, s_mods[i].manifest.version[0] ? " " : "",
+                          s_mods[i].manifest.version, s_mods[i].folder, s_mods[i].enabled ? "" : " (off)");
             } else {
                 XR_NOTICE("[MOD] mod ignored (%s): %s\n", s_mods[i].problem, s_mods[i].folder);
             }
@@ -1120,6 +1438,119 @@ static int is_mod_sub(int r, const char *rel)
     return 0;
 }
 
+/* ── Conflicts: files more than one source has ──────────────────────────
+ * Found once, at the start, for the log and the counts in bo3_mod: the files
+ * of the enabled mods' lists, each looked for in every source in lookup
+ * order, with the walk a lookup makes; the first one that has it is the one
+ * used, as in redirect. Over MODFS_CONFLICT_WALK different files, nothing is
+ * walked: mods with a list are compared by their lists alone, the others not.
+ * Files that no enabled mod's list has are not looked at: two loose folders,
+ * or a loose folder and a mod without a list, with the same file are not
+ * told. */
+#define MODFS_CONFLICT_WALK 1024
+#define MODFS_CONFLICT_LINES 32
+
+static int s_nconf;
+
+/* Whether a lookup of key would be answered by s: its list says so first,
+ * then the walk redirect makes decides (a listed file can still be refused:
+ * a path too long, names that differ only in case). walk 0: the list only. */
+static int source_has(const source *s, const char *key, int walk, int *ambiguous)
+{
+    char q[MAX_PATH + MODFS_NAME_MAX + 8], host[MAX_PATH];
+
+    *ambiguous = 0;
+    if (s->listed && (!s->nfiles || !bsearch(&key, s->files, (size_t)s->nfiles, sizeof *s->files, by_string)))
+        return 0;
+    if (s->listed && !walk)
+        return 1;
+    if (s->mod < 0 ? is_mod_sub(s->root, key) || snprintf(q, sizeof q, "%s", key) >= (int)sizeof q
+                   : snprintf(q, sizeof q, "%s/%s", s->prefix, key) >= (int)sizeof q)
+        return 0;
+    return mod_file(s_dirs[s->root], q, host, MODFS_HOST_MAX, ambiguous);
+}
+
+static void source_name(const source *s, char *out, size_t n)
+{
+    if (s->mod < 0)
+        snprintf(out, n, "folder %d", s->root + 1);
+    else
+        snprintf(out, n, "mod %s", s_mods[s->mod].manifest.id);
+}
+
+static void find_conflicts(void)
+{
+    const char **keys;
+    size_t nk = 0, cap = 0, distinct = 0;
+    int walk, more = 0;
+
+    s_nconf = 0;
+    for (int i = 0; i < s_nsrc; i++)
+        if (s_src[i].listed)
+            cap += (size_t)s_src[i].nfiles;
+    if (!cap)
+        return;
+    keys = malloc(cap * sizeof *keys);
+    if (!keys) {
+        XR_NOTICE("[MOD] conflicts not looked for (out of memory)\n");
+        return;
+    }
+    for (int i = 0; i < s_nsrc; i++)
+        for (int f = 0; s_src[i].listed && f < s_src[i].nfiles; f++)
+            keys[nk++] = s_src[i].files[f];
+    qsort(keys, nk, sizeof *keys, by_string);
+    for (size_t k = 0; k < nk; k++)
+        distinct += !k || strcmp(keys[k], keys[k - 1]);
+    walk = distinct <= MODFS_CONFLICT_WALK;
+    if (!walk)
+        XR_NOTICE("[MOD] mods have more than %d files: conflicts with loose files and with mods looked up on disk "
+                  "not looked for\n", MODFS_CONFLICT_WALK);
+    for (size_t k = 0; k < nk; k++) {
+        char line[600], name[BO3_MOD_ID_MAX + 8];
+        int first = -1, losers = 0;
+        size_t len = 0;
+
+        if (k && !strcmp(keys[k], keys[k - 1]))
+            continue;
+        for (int i = 0; i < s_nsrc; i++) {
+            int amb, has;
+            if (!s_src[i].listed && !walk)
+                continue;
+            has = source_has(&s_src[i], keys[k], walk, &amb);
+            if (!has) {
+                if (amb)
+                    break;   /* the lookup stops here too */
+                continue;
+            }
+            source_name(&s_src[i], name, sizeof name);
+            if (first < 0) {
+                first = i;
+                len = (size_t)snprintf(line, sizeof line, "%s over", name);
+                continue;
+            }
+            losers++;
+            if (s_src[i].mod >= 0)
+                s_mods[s_src[i].mod].loses++;
+            if (len < sizeof line)
+                len += (size_t)snprintf(line + len, sizeof line - len, "%s %s", losers > 1 ? "," : "", name);
+        }
+        if (!losers)
+            continue;
+        if (len >= sizeof line)
+            memcpy(line + sizeof line - 4, "...", 4);   /* more places than the line holds */
+        s_nconf++;
+        if (s_src[first].mod >= 0)
+            s_mods[s_src[first].mod].wins++;
+        if (s_nconf <= MODFS_CONFLICT_LINES)
+            XR_NOTICE("[MOD] conflict: %s: %s\n", keys[k], line);
+        else
+            more++;
+    }
+    if (more)
+        XR_NOTICE("[MOD] ... and %d more conflicts\n", more);
+    free(keys);
+}
+
 int bo3_modfs_mod_count(void)
 {
     return s_nmods;
@@ -1128,6 +1559,67 @@ int bo3_modfs_mod_count(void)
 const bo3_mod *bo3_modfs_mod(int i)
 {
     return i >= 0 && i < s_nmods ? &s_mods[i] : NULL;
+}
+
+void bo3_modfs_state_file(const char *path)
+{
+    if (path && strlen(path) + sizeof ".tmp" > sizeof s_state) {
+        XR_NOTICE("[MOD] mod list path too long, no mod list: %.200s...\n", path);
+        path = NULL;
+    }
+    snprintf(s_state, sizeof s_state, "%s", path ? path : "");
+    s_state_read = 0;   /* read again, at the start or when needed */
+}
+
+int bo3_modfs_enabled_next(const char *id)
+{
+    int on = 1;
+    if (!id || !s_lock_made)
+        return 1;
+    STATE_LOCK();
+    if (state_ready())
+        on = !is_off(id);
+    STATE_UNLOCK();
+    return on;
+}
+
+int bo3_modfs_set_enabled(const char *id, int on)
+{
+    int i, ok = 1;
+
+    if (!bo3_manifest_id_ok(id) || !s_state[0] || !s_lock_made)
+        return 0;
+    STATE_LOCK();
+    if (!state_ready()) {   /* never write a list that could not be read: it would lose its ids */
+        STATE_UNLOCK();
+        return 0;
+    }
+    for (i = 0; i < s_noff && strcmp(s_off[i], id); i++)
+        ;
+    if (on ? i < s_noff : i == s_noff) {   /* else it already is so: nothing to write */
+        int n = s_noff;
+        memcpy(s_off_undo, s_off, sizeof s_off);
+        if (on) {
+            memmove(s_off[i], s_off[i + 1], (size_t)(s_noff - i - 1) * sizeof s_off[0]);
+            s_noff--;
+        } else if (s_noff < BO3_MODFS_MAX_OFF) {
+            memcpy(s_off[s_noff++], id, strlen(id) + 1);
+        } else {
+            ok = 0;
+        }
+        if (ok && !write_state()) {
+            memcpy(s_off, s_off_undo, sizeof s_off);
+            s_noff = n;
+            ok = 0;
+        }
+    }
+    STATE_UNLOCK();
+    return ok;
+}
+
+int bo3_modfs_conflicts(void)
+{
+    return s_nconf;
 }
 
 /* host NULL: guest's file was refused because names in a folder differ only
@@ -1232,12 +1724,24 @@ void bo3_modfs_init(void)
     }
 #endif
 
+#if defined(_WIN32)
+    if (!s_lock_made) {
+        InitializeCriticalSection(&s_lock);
+        InitializeCriticalSection(&s_state_lock);
+        s_lock_made = 1;
+    }
+#endif
     for (int i = 0; i < s_nsrc; i++)    /* a second call (the unit test) */
         list_free(s_src[i].files, s_src[i].nfiles);
     s_ndirs = 0;
     s_nseen = 0;
     s_nmods = 0;
     s_nsrc = 0;
+    s_nconf = 0;
+    s_noff = 0;            /* before the title runs: no other thread yet */
+    s_state_read = 0;      /* the mod list: read below when there is a mod, else when asked */
+    s_state_bad = 0;
+    s_state_said = 0;
     if (!e || !*e)
         return;
     strncpy(buf, e, sizeof buf - 1);
@@ -1263,16 +1767,16 @@ void bo3_modfs_init(void)
     }
     for (int r = 0; r < s_ndirs; r++)
         find_mods(r);
+    if (s_nmods) {          /* the mod list is read at the start only when there is a mod */
+        STATE_LOCK();
+        read_state();
+        STATE_UNLOCK();
+    }
     list_mods();
+    find_conflicts();
     fflush(stderr);
     if (!s_ndirs || xbox_PathRedirectHook == redirect)
         return;
-#if defined(_WIN32)
-    if (!s_lock_made) {
-        InitializeCriticalSection(&s_lock);
-        s_lock_made = 1;
-    }
-#endif
     s_prev = xbox_PathRedirectHook;
     xbox_PathRedirectHook = redirect;
 }

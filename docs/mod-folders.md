@@ -187,6 +187,60 @@ mod with more than 4096 files, or folders more than eight levels below `files`,
 no list is made: each file is looked up in it on disk instead, as for loose
 files, which is slower (the log says so).
 
+## Turning mods on and off
+
+Every mod is on unless the mod list names it as off. The mod list is
+`mod-list.toml`, beside the game's `settings.toml` (in the save folder when
+there is none); `TAKEDAWN_MOD_LIST` names another file instead (an empty
+value: no mod list, every mod on). It is read at the start when a mod folder
+has installed mods:
+
+```toml
+# Takedawn: mods that are off, by id (docs/mod-folders.md). Read at start.
+disabled = ["example.car-pack", "example.sound-pack"]
+```
+
+- The file is the game's own; it can be edited by hand while the game is not
+  running. No file means every mod is on.
+- A change is used from the next start, like a new mod. An off mod's files are
+  not used; it is still listed in the log, with `(off)`, and its subfolder is
+  still not part of the loose files.
+- Ids of mods that are not installed stay in the list, so a mod that is taken
+  out and put back stays off.
+- An entry that is not a mod id is skipped, and the log says so. The list keeps
+  at most 256 ids. Skipped entries and ids past 256 are dropped when the game
+  next writes the list.
+- A file that is not a list of ids (not TOML, `disabled` not a list, larger
+  than 64 KiB) leaves every mod on, and the log says why. When the game next
+  writes the list, that file is first kept as `mod-list.toml.bad` (replacing
+  an older one).
+- A file that cannot be read at that moment (another program has it open)
+  also leaves every mod on; the game does not write the list then, so nothing
+  in it is lost.
+- The game writes a new `mod-list.toml.tmp`, flushes it to the disk and
+  renames it over the list. If it stops part way, or the write fails, the list
+  stays as it was (the log says so).
+
+Turning a mod off is also how to choose between two mods that have the same
+file. The order itself is fixed (see Which file is read).
+
+### Conflicts
+
+At the start the log names every file of a mod that is on that another place
+also supplies, and which one is used:
+
+```
+[MOD] conflict: tracks/us/c3_v1/static.dat: mod example.car-pack over mod example.other-pack, folder 2
+```
+
+Places are a mod (`mod <id>`) or a folder's loose files (`folder <n>`); the
+one used is the one a lookup takes. The first 32 conflicts are listed, then a
+count. The files compared are those in the lists of mods that are on (see
+below): a file that two folders' loose files share, or that loose files and a
+mod without a list share, is not reported. With more than 1024 different files
+in those lists, mods with a list are compared by their lists alone and the
+others not, and the log says so.
+
 ## What is refused
 
 The disc's own file is read instead when:
@@ -280,7 +334,11 @@ the file without touching the disk. A lookup through a mod that has it checks
 the path from the mod folder down, the mod's subfolder and `files` included,
 in the same way as a loose file. The mods and their lists do not change while
 the game runs (`modfs.h`), so reading them takes no lock; the only lock is the
-one that keeps each "[MOD] ... -> ..." line to once, as before.
+one that keeps each "[MOD] ... -> ..." line to once, as before. The saved mod
+list has a lock of its own, so saving it never holds a lookup up. Mods that
+are off have no place in the lookup. The
+mod list's file is named by `main.c` (`bo3_modfs_state_file`) and changed
+through `bo3_modfs_set_enabled`, the call a front end uses.
 
 `tests/modfs` checks the rules on folders it makes in the temporary directory
 (no game data): `ctest -R bo3_modfs`. `tests/modmanifest` checks `mod.toml`
