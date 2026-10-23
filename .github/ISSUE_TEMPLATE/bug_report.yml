@@ -1,5 +1,5 @@
 name: Bug report
-description: Something doesn't work, crashes or looks wrong.
+description: Something doesn't work, crashes or looks wrong. One problem per issue.
 labels: [bug]
 body:
   - type: dropdown
@@ -30,6 +30,7 @@ body:
     id: what
     attributes:
       label: What happened, and what did you expect?
+      description: One problem per issue. If you found several, open an issue for each, so each one can be fixed and closed on its own.
     validations:
       required: true
   - type: textarea
@@ -59,4 +60,6 @@ body:
         - label: I use my own disc; this report has no game files, disc images or links to them.
           required: true
         - label: I searched the existing issues.
+          required: true
+        - label: This issue is about one problem only.
           required: true
