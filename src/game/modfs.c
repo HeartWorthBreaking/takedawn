@@ -1551,6 +1551,11 @@ static void find_conflicts(void)
     free(keys);
 }
 
+int bo3_modfs_folder_count(void)
+{
+    return s_ndirs;
+}
+
 int bo3_modfs_mod_count(void)
 {
     return s_nmods;

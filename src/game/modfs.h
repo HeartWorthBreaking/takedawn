@@ -32,6 +32,7 @@ typedef struct bo3_mod {
 } bo3_mod;
 
 void bo3_modfs_init(void);
+int bo3_modfs_folder_count(void);      /* mod folders taken (0: none, the mod loader is off) */
 int bo3_modfs_mod_count(void);
 const bo3_mod *bo3_modfs_mod(int i);   /* NULL outside 0 .. count - 1 */
 
