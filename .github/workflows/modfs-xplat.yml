@@ -1,0 +1,123 @@
+# Fork-only check of the mod folders and mod.toml manifests (src/game/modfs.c,
+# src/game/modmanifest.c) on each host family: the unit tests (tests/modfs,
+# tests/modmanifest) on Linux, macOS (its usual case-folding volume and a
+# case-sensitive one) and Windows, sanitizer runs on Linux, and an Android NDK
+# build for the APK's target. No game data, no secrets, nothing uploaded. It
+# runs only when started by hand, and never in the upstream repository. Each
+# job first checks that it tests the intended commit: this workflow's own
+# commit on top of EXPECT_BASE, changing nothing but this file. (Kept under the
+# file name modfs-xplat.yml, which the fork already knows: GitHub starts by hand
+# only a workflow file it has seen.)
+name: modmgr cross-platform
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modmgr-xplat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The toolkit of Takedawn 0.2.1 (tag takedawn-0.2.1); its headers and the TOML reader (src/enhance/recomp_cfg.c).
+  XBOXRECOMP_REF: e3756d1b2fefdae6888038384c748cbdd37a41ba
+  # The commit under test (feature/per-mod-management, on A 124f0ce).
+  EXPECT_BASE: b3ac1e9a03c4935f07153b49bb993cd44929ed41
+  SRCS: src/game/modfs.c src/game/modmanifest.c xboxrecomp/src/enhance/recomp_cfg.c
+  INCS: -isystem xboxrecomp/src -isystem xboxrecomp/src/kernel -Ixboxrecomp/src/enhance -Isrc/game
+
+jobs:
+  unit:
+    if: github.repository != 'xenophobentx/takedawn'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: the intended commit
+        shell: bash
+        run: |
+          git log -2 --format='%H %s'
+          test "$(git rev-parse HEAD^)" = "$EXPECT_BASE"
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/modfs-xplat.yml
+      - name: toolkit (xboxrecomp at the pinned commit; kernel, platform, enhance)
+        run: |
+          git init -q xboxrecomp
+          git -C xboxrecomp sparse-checkout set src/kernel src/platform src/enhance
+          git -C xboxrecomp fetch -q --depth 1 --filter=blob:none https://github.com/xenophobentx/xboxrecomp.git "$XBOXRECOMP_REF"
+          git -C xboxrecomp checkout -q FETCH_HEAD
+      - name: build the tests (warnings are errors)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then CC=gcc; LIBS=; else CC=cc; LIBS=-pthread; fi
+          "$CC" --version | head -1
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS tests/modfs/test_main.c $SRCS $LIBS -o modfs_test
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS tests/modmanifest/test_main.c src/game/modmanifest.c \
+              xboxrecomp/src/enhance/recomp_cfg.c -o modmanifest_test
+      - name: run the tests
+        run: |
+          ./modmanifest_test
+          ./modfs_test
+      - name: run tests/modfs on a case-sensitive volume (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -quiet -size 64m -fs "Case-sensitive APFS" -volname modfs-cs "$RUNNER_TEMP/cs.dmg"
+          mkdir -p "$RUNNER_TEMP/cs"
+          hdiutil attach -quiet -nobrowse -mountpoint "$RUNNER_TEMP/cs" "$RUNNER_TEMP/cs.dmg"
+          TMPDIR="$RUNNER_TEMP/cs" ./modfs_test
+          hdiutil detach -quiet "$RUNNER_TEMP/cs"
+      - name: address, undefined-behaviour and thread sanitizers (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          for s in address,undefined thread; do
+            clang -std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=$s -fno-sanitize-recover=all \
+                $INCS tests/modfs/test_main.c $SRCS -pthread -o modfs_test_san
+            ./modfs_test_san
+          done
+          clang -std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+              $INCS tests/modmanifest/test_main.c src/game/modmanifest.c xboxrecomp/src/enhance/recomp_cfg.c \
+              -o modmanifest_test_san
+          ./modmanifest_test_san
+
+  android-ndk:
+    if: github.repository != 'xenophobentx/takedawn'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: the intended commit
+        shell: bash
+        run: |
+          git log -2 --format='%H %s'
+          test "$(git rev-parse HEAD^)" = "$EXPECT_BASE"
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/modfs-xplat.yml
+      - name: toolkit (xboxrecomp at the pinned commit; kernel, platform, enhance)
+        run: |
+          git init -q xboxrecomp
+          git -C xboxrecomp sparse-checkout set src/kernel src/platform src/enhance
+          git -C xboxrecomp fetch -q --depth 1 --filter=blob:none https://github.com/xenophobentx/xboxrecomp.git "$XBOXRECOMP_REF"
+          git -C xboxrecomp checkout -q FETCH_HEAD
+      - name: compile and link for arm64 Android 13 (API 33, the APK's minSdk); not run
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          [ -d "$NDK" ] || { echo "no NDK on this runner image"; exit 1; }
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          "$CC" --version | head -1
+          for f in $SRCS tests/modfs/test_main.c; do
+            "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS -c "$f" -o "$(basename "$f").o"
+          done
+          "$CC" *.o -o modfs_test_android
+          file modfs_test_android
