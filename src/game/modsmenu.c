@@ -329,7 +329,7 @@ static void detail_text(int cur, char *det, size_t dn, char *info, size_t in)
     if (cur >= 0 && cur < s_nlines && s_line_mod[cur] >= 0) {
         const bo3_mod *m = bo3_modfs_mod(s_line_mod[cur]);
         if (shared_id(m)) {
-            snprintf(det, dn, "ID ALSO USED BY %s", last_part(shared_id(m)->folder));   /* not the whole path */
+            snprintf(det, dn, "ID ALSO USED BY %.60s", last_part(shared_id(m)->folder));   /* not the whole path */
         } else if (!m->usable) {
             snprintf(det, dn, "%s", m->problem);
         } else {
@@ -342,7 +342,7 @@ static void detail_text(int cur, char *det, size_t dn, char *info, size_t in)
             else
                 snprintf(det, dn, "V%.10s  BY %.24s", ver[0] ? ver : "-", by[0] ? by : "UNKNOWN");
             if (m->manifest.description[0])
-                snprintf(info, in, "%s", m->manifest.description);
+                snprintf(info, in, "%.100s", m->manifest.description);   /* a line shows 47 */
         }
     } else if (cur == s_apply_line) {
         snprintf(det, dn, "%s", s_save_failed ? "A: TRY AGAIN"

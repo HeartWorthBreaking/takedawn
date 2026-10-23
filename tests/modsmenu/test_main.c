@@ -675,8 +675,8 @@ int main(void)
     snprintf(state, sizeof state, "%s", at("state/mod-list.toml"));
     mkdir_one(at("state"));
     snprintf(s_made[s_nmade++], 700, "%s", state);
-    snprintf(s_made[s_nmade++], 700, "%s.tmp", state);
-    snprintf(s_made[s_nmade++], 700, "%s.bad", state);
+    snprintf(s_made[s_nmade++], 700, "%.690s.tmp", state);
+    snprintf(s_made[s_nmade++], 700, "%.690s.bad", state);
     bo3_modfs_state_file(state);
 
     /* No mod folder: the title's page, untouched. */
