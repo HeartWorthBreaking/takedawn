@@ -1,0 +1,194 @@
+# Native plugins
+
+An installed mod (see [mod-folders.md](mod-folders.md), Installed mods) can
+bring a native plugin: a shared library that Takedawn loads at the start. The
+first version of the plugin API gives a plugin very little: it is started,
+can write lines to the game's log, and can be told when the game ends. It
+cannot yet see or change anything in the game.
+
+## Read this first
+
+A plugin is ordinary program code. It runs inside the game's process with
+your permissions: it can read and change your files, use the network and
+crash or hang the game, like any program you start. Nothing about plugins is
+sandboxed, and a fault in a plugin is a fault in the game. Run only plugins
+from people you trust.
+
+Takedawn decides only **which** files may be loaded and **when**, never what a
+plugin does once it runs. Loading a library also runs the library's own
+start-up code before Takedawn can look at it, so a module that is refused
+because its exports are wrong has still run that code: "refused" means "not
+started through the API", not "never ran". Takedawn never unloads a plugin.
+
+## When a plugin runs
+
+At the start, after the mod folders are read and before the game itself
+starts, on the game's main thread, once. A plugin is loaded only when all of
+these hold:
+
+1. plugins are not turned off: `TAKEDAWN_PLUGINS=0` turns them all off, whatever
+   anything else says;
+2. this system loads plugins: Windows (`.asi` or `.dll`) and Linux (`.so`);
+   macOS (`.dylib`) only with `TAKEDAWN_PLUGINS=1`, because it has not been
+   tried there yet; never on Android;
+3. its mod is usable and on (the mod list; the MODS page);
+4. its `mod.toml` names a module for this system, for a plugin API version
+   this Takedawn has;
+5. the module is a regular file inside the mod's own folder, not in its
+   `files` folder, and reached without a link, junction or reparse point;
+6. **you approved it**: the approval file lists the mod's id with the SHA-256
+   of the module's bytes as they are now.
+
+A plugin that is copied in is therefore not run until you approve it, and a
+plugin whose file changes (an update, or someone else's change) is not run
+until you approve the new bytes. Files that are not declared are never
+loaded: a stray `.asi` in a mod folder, in its `files` folder or beside the
+game is ignored.
+
+Plugins are loaded in the mods' order (the folders in `TAKEDAWN_MODS` order,
+in each its mods by `id`). A change (a new plugin, an approval, a mod turned
+off) is used from the next start: nothing is loaded or unloaded while the
+game runs.
+
+A plugin that cannot be loaded or started is listed in the log with the
+reason. Its mod's other files are still used, and other mods are not
+affected.
+
+## Declaring a plugin (mod.toml)
+
+```toml
+id = "example.hello-plugin"
+name = "Hello Plugin"
+version = "1.0.0"
+
+[plugin]
+api = 1                      # the plugin API version the module was built for
+windows = "hello.asi"        # one module per system; a system without a key has no plugin
+linux = "libhello.so"
+macos = "libhello.dylib"
+```
+
+- `api` is required: a whole number from 1. A Takedawn that does not have that
+  version does not load the module at all (the log says so).
+- `windows`, `linux`, `macos` and `android` are paths relative to the mod's
+  folder: plain names separated by `/` or `\`; no drive, no `..`, not in
+  `files`; ending in `.asi` or `.dll` (Windows), `.so` (Linux, Android) or
+  `.dylib` (macOS), in any case. Every system's key is checked on every
+  system, so a manifest means the same everywhere.
+- A `[plugin]` table that breaks these rules makes the whole mod invalid (the
+  MODS page and the log say why): a typo never quietly drops a plugin.
+  Unknown keys in `[plugin]` are left alone, for later versions.
+- A Takedawn without plugin support ignores `[plugin]`: the mod's files are
+  used, its code is not run.
+
+## Approving a plugin
+
+The approval file is `plugin-approvals.toml` beside `settings.toml` (the same
+folder as the mod list); `TAKEDAWN_PLUGIN_APPROVALS` names another file, and
+an empty value means no approval file (no plugin runs). Takedawn reads it at
+the start and never writes it.
+
+```toml
+# Native plugins I allow to run (docs/native-plugins.md).
+approved = ["example.hello-plugin sha256:50825ef19b83bf3766982137e00a2c6e04945580268b83b263f8a48f5f9f1cb2"]
+```
+
+Each entry is a mod id, a space, `sha256:` and the module's SHA-256 in lower
+case. When a plugin is not approved, the log gives the exact entry to add:
+
+```
+[PLUGIN] example.hello-plugin: not run: not approved. It is native code and runs with your permissions; to allow this module, add "example.hello-plugin sha256:50825e..." to approved in C:\...\plugin-approvals.toml
+```
+
+Check where the module came from before you add it. A file that is not a
+list of such strings (not TOML, `approved` not a list, larger than 64 KiB)
+approves nothing, and the log says why.
+
+## Writing a plugin
+
+Include [`include/takedawn_plugin.h`](../include/takedawn_plugin.h), the only
+file you need, and export two functions with these names:
+
+```c
+#include "takedawn_plugin.h"
+
+TD_EXPORT uint32_t TD_CALL takedawn_plugin_api_version(void)
+{
+    return TD_PLUGIN_API_VERSION;            /* must equal api in mod.toml */
+}
+
+TD_EXPORT int32_t TD_CALL takedawn_plugin_init(const td_host_api *api, td_plugin_info *info)
+{
+    api->log(api->host, TD_LOG_INFO, "hello from API 1");
+    info->struct_size = sizeof *info;
+    info->on_shutdown = NULL;                /* or a function: best effort at a normal exit */
+    return TD_OK;
+}
+```
+
+[`examples/plugins/hello`](../examples/plugins/hello) is a complete plugin
+with its `mod.toml`. Build it as a shared library:
+
+```
+clang -shared -Iinclude examples/plugins/hello/hello.c -o hello.asi                 (Windows, clang / MinGW)
+cl /LD /Iinclude examples\plugins\hello\hello.c /Fe:hello.asi                       (Windows, MSVC)
+cc -shared -fPIC -fvisibility=hidden -Iinclude examples/plugins/hello/hello.c -o libhello.so   (Linux)
+```
+
+The API is plain C: fixed-size integers, function pointers, and structures
+whose first field is their size. Nothing from a C runtime crosses it (no
+`FILE *`, no memory one side allocates and the other frees), so a plugin may
+be built with another compiler than Takedawn's. The rules:
+
+- `takedawn_plugin_api_version` is called first; when its answer is not the
+  `api` the manifest declares, `takedawn_plugin_init` is not called.
+- `takedawn_plugin_init` is called once, on the main thread, before the game
+  starts, and should return quickly. `api` stays valid until the process
+  ends; `info` is the plugin's to fill in.
+- `api->log` may be called from any thread: one line in the game's log as
+  `[PLUGIN <mod id>] <text>`, at most 1023 bytes kept, control characters
+  shown as `?`.
+- `api->mod_id` and `api->host_version` return Takedawn's own strings, valid
+  until the process ends.
+- `on_shutdown` is called once at a normal exit, newest plugin first, on the
+  thread that ends the process. It is not called on a crash, when the process
+  is ended from outside, or by the system's quick exit paths: do not depend
+  on it.
+- Keep the library's own start-up code (`DllMain`, constructors) empty; do
+  the work in `takedawn_plugin_init`.
+
+New versions of the API add to it: a structure only gains fields at its end
+(`struct_size` says which the other side has), and nothing is removed.
+
+## How it works
+
+`src/game/plugins.c` decides; `plugins_win32.c` and `plugins_posix.c` load.
+On Windows the module is opened with only reading shared, so that it cannot
+be written, replaced or deleted until it is loaded; it is hashed through that
+handle and loaded by its full path with `LoadLibraryExW` and
+`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`: its own
+dependencies come from its folder or System32, never the current folder or
+`PATH`, and nothing process-wide is changed. After loading, the module the
+system mapped must be the file that was hashed. On Linux it is opened without
+following links, hashed, loaded with `dlopen(RTLD_NOW | RTLD_LOCAL)`, and the
+path must still be the same file (device and inode) afterwards; the
+module's own dependencies are found the system's way (its rpath,
+`LD_LIBRARY_PATH`). Someone who can write the mod folder while the game starts
+is trusted as much as the module itself, as for every mod file.
+
+`tests/plugins` builds test modules of every kind and checks the rules above
+on folders it makes (`ctest -R bo3_plugins`); each test module records the
+moment it is loaded, so "never loaded" is checked directly.
+
+## Verified
+
+Windows 11 (build 26300), clang 23.1.2 (llvm-mingw), 2026-10-24:
+`tests/plugins` (approved, not approved, other bytes, changed bytes, mod off,
+`TAKEDAWN_PLUGINS=0`, a bad and a missing approval file, missing and wrong
+exports, a newer API, an init failure, a missing module, a folder named like
+one, a junction on the path, undeclared modules beside a declared one, load
+order, the example plugin's log line and its shutdown line) and the existing
+`tests/modfs`, `tests/modmanifest` and `tests/modsmenu`.
+
+Not checked: the game itself with a plugin; Linux, macOS and Android builds
+and runs; a plugin built with MSVC.

@@ -1551,6 +1551,12 @@ static void find_conflicts(void)
     free(keys);
 }
 
+int bo3_modfs_mod_file(const bo3_mod *m, const char *rel, char *out, size_t n)
+{
+    int ambiguous;
+    return m && rel && *rel && out && n && mod_file(m->folder, rel, out, n, &ambiguous);
+}
+
 int bo3_modfs_folder_count(void)
 {
     return s_ndirs;

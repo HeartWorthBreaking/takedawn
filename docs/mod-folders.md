@@ -131,6 +131,10 @@ author = "Someone"             # optional, up to 128 bytes
 description = "What it does."  # optional, up to 1024 bytes
 ```
 
+A mod may also declare a native plugin in a `[plugin]` table; see
+[native-plugins.md](native-plugins.md). A plugin runs only when you approved
+it, never because its mod is on.
+
 The file is UTF-8 and at most 8 KiB. `name`, `author` and `description` may not
 contain control characters (no line breaks), nor the Unicode line and paragraph
 separators or the marks and controls that change the direction of text.
@@ -313,7 +317,10 @@ and a path written with `\\?\` or `\\.\` are ignored.
 The checks are made when the game opens a file; the toolkit then opens the
 path. Someone who can change the mod folder while the game runs could swap a
 part for a link in between: a mod folder is trusted as much as the files in it.
-Nothing in a mod folder is run; the game only reads it.
+The game only reads a mod folder's files. The one exception is a native plugin
+that an installed mod declares and that you approved
+([native-plugins.md](native-plugins.md)): that module is run, with your
+permissions; nothing else in a mod folder ever is.
 
 ## What is not checked
 

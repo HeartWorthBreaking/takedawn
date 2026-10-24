@@ -51,5 +51,10 @@ int bo3_modfs_enabled_next(const char *id);
 int bo3_modfs_set_enabled(const char *id, int on);
 /* Files more than one place supplies (this session; see the log for which). */
 int bo3_modfs_conflicts(void);
+/* The host path of rel inside mod m's own folder (beside its mod.toml, not
+ * in files), found the way a lookup finds a file: every part a plain name,
+ * none a link or reparse point, a regular file at the end. 1 with out set,
+ * else 0. For a plugin's module (plugins.c). */
+int bo3_modfs_mod_file(const bo3_mod *m, const char *rel, char *out, size_t n);
 
 #endif
