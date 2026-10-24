@@ -47,5 +47,39 @@ void bo3_plugins_init(const char *host_version);
 bo3_plugin_state bo3_plugins_state(int i, char *why, size_t wn, char *sha, size_t sn);
 /* Plugins running in this session. */
 int bo3_plugins_running(void);
+/* Why no plugin can run in this process (TAKEDAWN_PLUGINS, this system), or
+ * NULL when they can. */
+const char *bo3_plugins_off(void);
+/* 1 when mod i's module was approved for its bytes at this start (it was
+ * then loaded: RUNNING, or REFUSED / FAILED after loading). */
+int bo3_plugins_was_approved(int i);
+
+/* The approval file for the MODS page (modsmenu.c): it says what the next
+ * start uses; nothing here changes this start's plugins. No lock: one
+ * caller (the page, on the game's thread), after bo3_plugins_init. */
+typedef enum {
+    BO3_APPROVALS_NONE = 0,     /* no approval file (TAKEDAWN_PLUGIN_APPROVALS is empty) */
+    BO3_APPROVALS_ABSENT,       /* not made yet: nothing approved; the page may make it */
+    BO3_APPROVALS_OK,           /* read; the page may change it */
+    BO3_APPROVALS_KEPT,         /* read and used, but with entries the page would not write back: left as it is */
+    BO3_APPROVALS_BAD           /* not readable now, or not an approval file: nothing approved; left as it is */
+} bo3_approvals_state;
+/* Read the approval file again. */
+bo3_approvals_state bo3_plugins_approvals(void);
+/* From the last read: 1 when id is approved for exactly sha (64 hex digits). */
+int bo3_plugins_approved_for(const char *id, const char *sha);
+/* From the last read: how many entries name id; the first one's hash into sha
+ * ("" when none, or not as the page writes it). sha may be NULL. */
+int bo3_plugins_approvals_of(const char *id, char *sha, size_t sn);
+/* id approved from the next start for exactly sha (64 lower-case hex digits),
+ * its other entries removed; or, sha NULL, every entry for id removed. The
+ * file is read again, written whole (bo3_modfs_write_whole) and read back. 1
+ * done (or already so), 0 not: the file as it was. Never written when it is
+ * NONE, KEPT or BAD, or when id or sha is not well-formed. */
+int bo3_plugins_set_approval(const char *id, const char *sha);
+/* Mod i's module (usable, with a module for this system) read and hashed the
+ * way a start does, never loaded: 1 with its SHA-256 (64 hex digits) in sha,
+ * else 0 with why (the log says it too). */
+int bo3_plugins_hash_module(int i, char sha[65], char *why, size_t wn);
 
 #endif

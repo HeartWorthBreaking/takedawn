@@ -86,7 +86,54 @@ macos = "libhello.dylib"
 The approval file is `plugin-approvals.toml` beside `settings.toml` (the same
 folder as the mod list); `TAKEDAWN_PLUGIN_APPROVALS` names another file, and
 an empty value means no approval file (no plugin runs). Takedawn reads it at
-the start and never writes it.
+the start; the MODS page (below) is the only part that writes it, and only
+when you choose so. You can also edit it by hand.
+
+### On the MODS page
+
+Driver Details > Settings > MODS lists a mod with a module for this system
+with `CODE` (its code is approved from the next start) or `CODE?` (it is
+not). A on such a mod goes:
+
+    OFF  ->  ON (its files only)  ->  APPROVE <module> <hash>  ->  ON + CODE  ->  OFF
+
+- **Turning a mod on never approves its code.** ON uses its files only.
+- **APPROVE** hashes the module, the way a start hashes it, without loading it. The line shows the module's file name and
+  the first 8 digits of its SHA-256. The two lines below say
+  `NATIVE CODE RUNS WITH YOUR PERMISSIONS` / `ONLY FROM SOURCES YOU TRUST - A: APPROVE`.
+  - Only A again approves those bytes.
+  - Moving the cursor away, B, or another page cancels.
+- **Nothing is written before APPLY.** When an approval is waiting, APPLY reads `APPLY - APPROVES CODE - RESTART REQUIRED`.
+- **APPLY saves in three steps:** it removes approvals first, then saves the mod list, then adds approvals.
+  - A step that fails stops the steps after it, and the page says `NOT SAVED - SEE THE LOG`.
+  - What is saved therefore never allows more code than you chose.
+  - The mod list and the approval file are two files, each written whole or not at all. A failure between them leaves at
+    most fewer approvals than chosen, never more.
+- **An approval is for exactly those bytes.** An update, or any other change to the module, shows
+  `CODE CHANGED - APPROVE AGAIN` and the code does not run until you approve the new bytes.
+- **A mod turned off, or on without its code, loses its approval at APPLY.** Turning it on again asks for approval again.
+- **Changes take effect at the next start.** A plugin that runs keeps running until Takedawn exits; the page then says
+  `RUNS UNTIL TAKEDAWN EXITS - RESTART REQUIRED`. Nothing is unloaded.
+- **The page writes the file whole:** a new file, flushed, then renamed over the old one, the same way as the mod list.
+  - It keeps every other entry and replaces or removes only that mod's.
+  - Comments in the file are not kept.
+  - At most 256 entries.
+- **The page never writes an approval file it would not fully understand.** Such a file stays as it is, and you can still
+  edit it by hand. This covers:
+  - a file it cannot read now, or that is not an approval file;
+  - a file with an entry not written the way the page writes it (`<id> sha256:<64 hex digits>`).
+- **There is no APPROVE when:** plugins are off in this process (`TAKEDAWN_PLUGINS=0`, Android, macOS without
+  `TAKEDAWN_PLUGINS=1`), there is no approval file, or the module cannot be hashed (`CODE MISSING - SEE LOG`).
+
+The details line under a code mod shows its code in this start:
+- `CODE RUNNING`;
+- `CODE NOT LOADED - SEE LOG`: refused or failed; the log has the reason;
+- `CODE NOT APPROVED`;
+- `CODE CHANGED - APPROVE AGAIN`;
+- `CODE NOT USED (MOD OFF)`;
+- `CODE OFF (...)`.
+
+It adds `RESTART REQUIRED` when the next start differs. The line below shows the module's name and hash.
 
 ```toml
 # Native plugins I allow to run (docs/native-plugins.md).
@@ -230,6 +277,9 @@ a module after the hash and checks that the rewrite is not what loads.
 | `approval file not used` | the file is not a list of strings, or larger than 64 KiB: nothing is approved |
 | `no sealed copy can be made` (Linux) | the kernel or a sandbox does not allow `memfd_create` |
 | `the module does not load (...)` | the system's own reason: a missing dependency, another architecture |
+| `approval not changed: the approval file ...` (MODS page `NOT SAVED - SEE THE LOG`, `APPROVAL FILE ...`) | the page leaves a file it cannot read, or with entries it would not write back, as it is: fix or edit it by hand |
+| `approval file not written` | its `.tmp` beside it could not be made or renamed (permissions, a folder of that name): nothing after it was saved; A on APPLY tries again |
+| `not hashed: ...` (MODS page `CODE MISSING - SEE LOG`) | the module named in `mod.toml` is not there, or not a regular file |
 
 A mod whose `[plugin]` table breaks the rules is invalid as a whole: its
 files are not used either (the MODS page says INVALID and why).
@@ -256,6 +306,21 @@ order, `info`'s size, eighty restarts, the example plugin's log and shutdown
 lines) and the existing `tests/modfs`, `tests/modmanifest` and
 `tests/modsmenu`.
 
-Not checked: Linux and macOS (written for them, not yet built or run there);
-Android (expected to build with plugins off; not built); the game itself
-with a plugin; a plugin built with MSVC.
+Fork CI, 2026-10-25 (before the MODS page part):
+- Linux (gcc 13, also under ASan and UBSan), macOS 15 and Windows (gcc 15): every test above, the plugins test included.
+- Android: built with plugins off.
+
+The MODS page part (approve, remove, the approval file writer), Windows 11 / clang 23, 2026-10-25:
+- `tests/modsmenu` and `tests/plugins`:
+  - files only, CODE / CODE?, the APPROVE step and its cancellation;
+  - nothing written before APPLY, APPLY and the next start, a running plugin turned off;
+  - changed bytes, a missing module, a file the page does not write back, one that is not an approval file;
+  - a failed write (approval and removal), plugins off, no approval file;
+  - hashing without loading, at most 256 entries;
+  - the existing MODS page cases unchanged.
+
+Not checked:
+- the MODS page part on Linux and macOS (needs a CI run);
+- the game itself with a plugin;
+- the macOS application bundle with a plugin;
+- a plugin built with MSVC.

@@ -796,6 +796,106 @@ int main(int argc, char **argv)
         CHECK(bo3_plugins_running() == 0 && !loaded("marker"), "nothing of the refused mods ran (%d)", bo3_plugins_running());
     }
 
+    /* the approval file as the MODS page changes it: a module hashed without
+     * loading it; written whole, read back; a file it would not write back
+     * left as it is; the next start runs exactly what was approved */
+    scenario("appr");
+    {
+        static char big[64 * 1024];
+        char p[900], q[912], hex[65], got[65], w2[200], *before;     /* q: p and ".tmp" */
+        static const char *const other = "abababababababababababababababababababababababababababababababab";
+        static const char *const other2 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+        declare(b, sizeof b, 1, "bin/good" EXT);
+        mod("m", "t.marker", b, "marker", "bin/good" EXT, 0);
+        start(NULL, NULL, 0);                                   /* approvals.toml: approved = [] */
+        snprintf(p, sizeof p, "%s/approvals.toml", s_dir);
+        snprintf(q, sizeof q, "%s/mods/m/bin/good" EXT, s_dir);
+        CHECK(state("t.marker", why) == BO3_PLUGIN_NOT_APPROVED && !loaded("marker"), "not approved, not loaded");
+        CHECK(bo3_plugins_hash_module(index_of("t.marker"), hex, w2, sizeof w2) && !loaded("marker"),
+              "hashed for an approval, never loaded (its start-up code did not run)");
+        sha_of(q, got);
+        CHECK(!strcmp(hex, got), "the hash is the module file's: %s", hex);
+        CHECK(!bo3_plugins_hash_module(index_of("t.marker") + 99, got, w2, sizeof w2) && !got[0], "no such mod: no hash");
+        CHECK(bo3_plugins_approvals() == BO3_APPROVALS_OK, "the file as start() wrote it: OK");
+        CHECK(bo3_plugins_set_approval("t.marker", hex) && bo3_plugins_approvals_of("t.marker", got, sizeof got) == 1
+              && !strcmp(got, hex) && bo3_plugins_approved_for("t.marker", hex), "approved: one entry, these bytes");
+        CHECK(bo3_plugins_set_approval("t.other", other) && bo3_plugins_set_approval("t.marker", other2)
+              && bo3_plugins_approvals_of("t.marker", got, sizeof got) == 1 && !strcmp(got, other2)
+              && bo3_plugins_approvals_of("t.other", NULL, 0) == 1, "an approval replaces that mod's own, keeps the others");
+        CHECK(bo3_plugins_set_approval("t.marker", NULL) && bo3_plugins_approvals_of("t.marker", NULL, 0) == 0
+              && bo3_plugins_approvals_of("t.other", NULL, 0) == 1, "removed: only that mod's");
+        CHECK(bo3_plugins_set_approval("t.marker", NULL), "removing what is not there: done, nothing to write");
+        before = read_file(p);
+        CHECK(!bo3_plugins_set_approval("Bad Id", hex) && !bo3_plugins_set_approval("t.marker", "abc")
+              && !bo3_plugins_set_approval("t.marker", "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB")
+              && !bo3_plugins_set_approval("t.x\", \"t.y sha256:00", hex) && !bo3_plugins_set_approval(NULL, hex),
+              "a malformed id or hash (an entry that would end the string early among them): refused");
+        t = read_file(p);
+        CHECK(before && t && !strcmp(before, t), "refused: the file as it was");
+        free(t);
+        /* a write that fails: the file as it was */
+        snprintf(q, sizeof q, "%s.tmp", p);
+        MKDIR(q);
+        CHECK(!bo3_plugins_set_approval("t.marker", hex), "a write that fails (its .tmp is a folder): not done");
+        t = read_file(p);
+        CHECK(t && !strcmp(before, t), "a failed write: the file as it was");
+        free(t);
+#if defined(_WIN32)
+        _rmdir(q);
+#else
+        rmdir(q);
+#endif
+        free(before);
+        /* a file the page would not write back, one that is not an approval file, none */
+        write_file(p, "approved = [\"t.other sha256:abababababababababababababababababababababababababababababababab\", \"by hand\"]\n");
+        CHECK(bo3_plugins_approvals() == BO3_APPROVALS_KEPT && !bo3_plugins_set_approval("t.marker", hex)
+              && !bo3_plugins_set_approval("t.other", NULL), "an entry it would not keep: left as it is (KEPT)");
+        t = read_file(p);
+        CHECK(t && strstr(t, "by hand"), "KEPT: unchanged");
+        free(t);
+        write_file(p, "approved = [nope\n");
+        CHECK(bo3_plugins_approvals() == BO3_APPROVALS_BAD && !bo3_plugins_set_approval("t.marker", hex),
+              "not an approval file: left as it is (BAD)");
+        t = read_file(p);
+        CHECK(t && !strcmp(t, "approved = [nope\n"), "BAD: unchanged");
+        free(t);
+        bo3_plugins_approval_file("");
+        CHECK(bo3_plugins_approvals() == BO3_APPROVALS_NONE && !bo3_plugins_set_approval("t.marker", hex), "no approval file: NONE");
+        bo3_plugins_approval_file(p);
+        remove(p);
+        CHECK(bo3_plugins_approvals() == BO3_APPROVALS_ABSENT && bo3_plugins_set_approval("t.marker", hex)
+              && bo3_plugins_approvals() == BO3_APPROVALS_OK, "none yet: made with the approval");
+        /* at most 256 approvals */
+        {
+            size_t n = (size_t)snprintf(big, sizeof big, "approved = [");
+            for (int k = 0; k < 256; k++)
+                n += (size_t)snprintf(big + n, sizeof big - n, "%s\"t.k%03d sha256:%s\"", k ? ", " : "", k, other);
+            snprintf(big + n, sizeof big - n, "]\n");
+            write_file(p, big);
+            CHECK(bo3_plugins_approvals() == BO3_APPROVALS_OK && !bo3_plugins_set_approval("t.marker", hex)
+                  && bo3_plugins_set_approval("t.k000", other2), "256 approvals: no 257th; one replaced");
+        }
+        /* the next start runs exactly what was approved: other bytes in its
+         * place are not run; the approved ones back, they are (a loaded
+         * module is never unloaded, so its bytes change before it loads) */
+        write_file(p, "approved = []\n");
+        CHECK(bo3_plugins_set_approval("t.marker", hex), "approved again");
+        snprintf(q, sizeof q, "%s/mods/m/bin/good" EXT, s_dir);
+        {
+            char from[800];
+            module_path(from, sizeof from, "order_a");
+            copy_file(from, q);
+            start(NULL, NULL, 1);                               /* the file as written above */
+            CHECK(state("t.marker", why) == BO3_PLUGIN_NOT_APPROVED && !bo3_plugins_was_approved(index_of("t.marker"))
+                  && !loaded("order_a") && !loaded("marker"), "other bytes in its place: not approved, not run");
+            module_path(from, sizeof from, "marker");
+            copy_file(from, q);
+        }
+        start(NULL, NULL, 1);
+        CHECK(state("t.marker", why) == BO3_PLUGIN_RUNNING && loaded("marker") && bo3_plugins_was_approved(index_of("t.marker")),
+              "the approved bytes back: they run (%s)", why);
+    }
+
     /* s7, the last start: two plugins that register on_shutdown (checked at exit) */
     scenario("s7");
     declare(b, sizeof b, 1, "bin/good" EXT);
