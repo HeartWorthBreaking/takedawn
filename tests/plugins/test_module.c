@@ -18,6 +18,9 @@
  *   BIGINFO        says it filled a far larger td_plugin_info (as a plugin
  *                  built with a newer header may), writing only within room
  */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE                 /* glibc declares dladdr and Dl_info only with it */
+#endif
 #include "takedawn_plugin.h"
 
 #include <stdio.h>

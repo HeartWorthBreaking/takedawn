@@ -293,7 +293,7 @@ static void to_backslash(char *p)
  * renamed, replaced or written while held. */
 static void identity_windows(void)
 {
-    char a[900], b[900], sub[900], file[1000], cmd[3000], from[800], x[1000], y[1000];
+    char a[900], b[900], sub[900], file[1000], cmd[3000], from[800], x[1000], y[1100];
     uint8_t sha[32];
     char why[200], hex[65], hex2[65];
     bo3_plugin_file *f;
@@ -481,13 +481,13 @@ int main(int argc, char **argv)
         write_file(p, "data");
     }
     {
-        char b2[400];
+        char b2[400], dirp[1000];
         declare(b2, sizeof b2, 1, "bin/none" EXT);
         mod("missing", "t.missing", b2, NULL, NULL, 0);
         declare(b2, sizeof b2, 1, "bin/dir" EXT);
         mod("dirmod", "t.dirmod", b2, NULL, NULL, 0);
-        snprintf(b2, sizeof b2, "%s/mods/dirmod/bin/dir" EXT, s_dir);
-        mkdirs(b2);
+        snprintf(dirp, sizeof dirp, "%s/mods/dirmod/bin/dir" EXT, s_dir);
+        mkdirs(dirp);
     }
     mod("order_b", "t.order.b", b, "order_b", "bin/good" EXT, 1);
     mod("order_a", "t.order.a", b, "order_a", "bin/good" EXT, 1);

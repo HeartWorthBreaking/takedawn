@@ -38,7 +38,7 @@ struct td_host {
 
 typedef struct {
     bo3_plugin_state state;
-    char why[200];
+    char why[400];                          /* a module path (up to BO3_PLUGIN_PATH_MAX) and the reason around it */
     char sha[65];
 } plugin_slot;
 
