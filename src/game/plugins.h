@@ -74,8 +74,10 @@ int bo3_plugins_approvals_of(const char *id, char *sha, size_t sn);
 /* id approved from the next start for exactly sha (64 lower-case hex digits),
  * its other entries removed; or, sha NULL, every entry for id removed. The
  * file is read again, written whole (bo3_modfs_write_whole) and read back. 1
- * done (or already so), 0 not: the file as it was. Never written when it is
- * NONE, KEPT or BAD, or when id or sha is not well-formed. */
+ * done (or already so); 0 not done (the file as it was) or not confirmed by
+ * the read-back (the file may have been written). Never written when it is
+ * NONE, KEPT or BAD, or when id or sha is not well-formed. Only approved is
+ * written back: comments and other keys in the file are not kept. */
 int bo3_plugins_set_approval(const char *id, const char *sha);
 /* Mod i's module (usable, with a module for this system) read and hashed the
  * way a start does, never loaded: 1 with its SHA-256 (64 hex digits) in sha,

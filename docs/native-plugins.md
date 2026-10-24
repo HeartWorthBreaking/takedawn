@@ -116,7 +116,7 @@ not). A on such a mod goes:
   `RUNS UNTIL TAKEDAWN EXITS - RESTART REQUIRED`. Nothing is unloaded.
 - **The page writes the file whole:** a new file, flushed, then renamed over the old one, the same way as the mod list.
   - It keeps every other entry and replaces or removes only that mod's.
-  - Comments in the file are not kept.
+  - Comments in the file, and any key other than `approved`, are not kept.
   - At most 256 entries.
 - **The page never writes an approval file it would not fully understand.** Such a file stays as it is, and you can still
   edit it by hand. This covers:
