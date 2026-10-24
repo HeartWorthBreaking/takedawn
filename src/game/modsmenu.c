@@ -365,12 +365,14 @@ static void module_name(int i, char *out, size_t n, size_t max)
 
 /* A mod's line: its name and state, and for native code CODE (approved from
  * the next start) or CODE?; while its approval waits for A, APPROVE CODE (the
- * module and its hash are on the information line: the line under the
- * cursor is drawn larger, and 28 characters is what fits there). */
+ * module and its hash are on the information line). The line under the
+ * cursor is drawn larger and 28 characters is what fits there, so a code
+ * mod's name is cut to fit its longest line: 15 + "  OFF*  CODE?", and
+ * 14 + "  APPROVE CODE". */
 static void mod_line(int i, char *buf, size_t bn)
 {
     char name[LABEL_CH];
-    size_t cut = s_confirm == i ? 14 : NAME_CH;
+    size_t cut = s_confirm == i ? 14 : has_code(i) ? 15 : NAME_CH;
     shown(name, sizeof name, mod_name(bo3_modfs_mod(i)));
     if (strlen(name) > cut) {
         size_t k = cut - 2;

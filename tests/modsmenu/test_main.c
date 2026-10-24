@@ -1335,7 +1335,20 @@ int main(int argc, char **argv)
               && !strncmp(line(3), "TRUSTED SOURCES ONLY: AVERYLONGM.. ", 35) && strlen(line(3)) == 35 + 8,
               "the warning and the module with its hash fit the lines below (<= 44): %s / %s", line(2), line(3));
         cursor_to(1);
-        CHECK(same_text(line(0), "ABCDEFGHIJKLMNOPQRSTUV..  ON  CODE?"), "moved away: cancelled (%s)", line(0));
+        CHECK(same_text(line(0), "ABCDEFGHIJKLM..  ON  CODE?"), "moved away: cancelled (%s)", line(0));
+        /* every state of a code mod's line fits the line under the cursor: the name cut to 15 */
+        {
+            static const char *const want_states[] = { "ABCDEFGHIJKL..  APPROVE CODE", "ABCDEFGHIJKLM..  ON*  CODE",
+                                                        "ABCDEFGHIJKLM..  OFF*  CODE?", "ABCDEFGHIJKLM..  ON  CODE?" };
+            int fits = 1;
+            cursor_to(0);
+            for (int k = 0; k < 4; k++) {
+                press_a();                    /* ON -> APPROVE -> ON + CODE -> OFF -> ON */
+                fits &= strlen(line(0)) <= 28;
+                CHECK(same_text(line(0), want_states[k]), "code mod state %d: %s", k, line(0));
+            }
+            CHECK(fits, "every state of a code mod's line is at most 28 characters");
+        }
         press_b();
 
         /* 11: a module that is not there: no APPROVE, said so */
