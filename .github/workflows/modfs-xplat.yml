@@ -1,0 +1,159 @@
+# Fork-only check of the mod folders, mod.toml manifests, the MODS page and native plugins (src/game/modfs.c, modmanifest.c,
+# modsmenu.c, plugins*.c) on each host family: the unit tests (tests/modfs, tests/modmanifest, tests/modsmenu, tests/plugins with
+# its test modules and the example plugin built as shared libraries) on Linux, macOS (its usual case-folding volume and a
+# case-sensitive one) and Windows, sanitizer runs on Linux, and an Android NDK build for the APK's target (plugins compiled out).
+# No game data, no secrets, nothing uploaded. It runs only when started by hand, and never in the upstream repository. Each job
+# first checks that it tests the intended commit: this workflow's own commit on top of EXPECT_BASE, changing nothing but this file.
+# (Kept under the file name modfs-xplat.yml, which the fork already knows: GitHub starts by hand only a workflow file it has seen.)
+name: modmgr and plugins cross-platform
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modmgr-xplat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The toolkit of Takedawn 0.2.1 (tag takedawn-0.2.1); its headers, the TOML reader (src/enhance/recomp_cfg.c), SHA-256 (src/install).
+  XBOXRECOMP_REF: e3756d1b2fefdae6888038384c748cbdd37a41ba
+  # The commit under test (feature/native-plugins, on feature/native-mods-menu d071d5f).
+  EXPECT_BASE: 66ae4a88d6e0badd6dbb8ab039a727c5bef06af5
+  SRCS: src/game/modfs.c src/game/modmanifest.c xboxrecomp/src/enhance/recomp_cfg.c
+  INCS: -isystem xboxrecomp/src -isystem xboxrecomp/src/kernel -Ixboxrecomp/src/enhance -Isrc/game
+  # The MODS page's test: the page, menuentry.c, the loader and native plugins against a stand-in for the title.
+  MM_INCS: -isystem xboxrecomp/templates/runtime -isystem xboxrecomp/src/platform -isystem xboxrecomp/src/overlay -DXBOXRECOMP_HAVE_OVERLAY -Iinclude -Ixboxrecomp/src/install
+  MM_SRCS: tests/modsmenu/test_main.c src/game/modsmenu.c src/game/menuentry.c src/game/plugins.c xboxrecomp/src/install/xr_sha256.c
+  # The plugins' test: the loader, the platform part, SHA-256, the public header.
+  PL_INCS: -Iinclude -Ixboxrecomp/src/install
+  PL_SRCS: tests/plugins/test_main.c src/game/plugins.c xboxrecomp/src/install/xr_sha256.c
+  PL_KINDS: GOOD NOINIT NOVERSION NEWVERSION INITFAIL MARKER ORDER_A ORDER_B BIGINFO
+
+jobs:
+  unit:
+    if: github.repository != 'xenophobentx/takedawn'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: the intended commit
+        shell: bash
+        run: |
+          git log -2 --format='%H %s'
+          test "$(git rev-parse HEAD^)" = "$EXPECT_BASE"
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/modfs-xplat.yml
+      - name: toolkit (xboxrecomp at the pinned commit; kernel, platform, enhance, overlay, install, runtime)
+        run: |
+          git init -q xboxrecomp
+          git -C xboxrecomp sparse-checkout set src/kernel src/platform src/enhance src/overlay src/install templates/runtime
+          git -C xboxrecomp fetch -q --depth 1 --filter=blob:none https://github.com/xenophobentx/xboxrecomp.git "$XBOXRECOMP_REF"
+          git -C xboxrecomp checkout -q FETCH_HEAD
+      - name: build the tests (warnings are errors)
+        run: |
+          case "$RUNNER_OS" in
+            Windows) CC=gcc; LIBS=; EXT=.asi; SO="-shared"; PL_SYS=src/game/plugins_win32.c; PL_LIBS= ;;
+            macOS)   CC=cc; LIBS=-pthread; EXT=.dylib; SO="-dynamiclib -fvisibility=hidden"; PL_SYS=src/game/plugins_posix.c; PL_LIBS= ;;
+            *)       CC=cc; LIBS=-pthread; EXT=.so; SO="-shared -fPIC -fvisibility=hidden"; PL_SYS=src/game/plugins_posix.c; PL_LIBS=-ldl ;;
+          esac
+          "$CC" --version | head -1
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS tests/modfs/test_main.c $SRCS $LIBS -o modfs_test
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS tests/modmanifest/test_main.c src/game/modmanifest.c \
+              xboxrecomp/src/enhance/recomp_cfg.c -o modmanifest_test
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS $MM_INCS $MM_SRCS $PL_SYS $SRCS $LIBS $PL_LIBS -o modsmenu_test
+          mkdir -p plugin_modules
+          for k in $PL_KINDS; do
+            "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $SO -DTP_KIND_$k -Iinclude tests/plugins/test_module.c \
+                -o "plugin_modules/$(echo "$k" | tr A-Z a-z)$EXT"
+          done
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $SO -Iinclude examples/plugins/hello/hello.c -o "hello$EXT"
+          "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS $PL_INCS $PL_SRCS $PL_SYS $SRCS $LIBS $PL_LIBS -o plugins_test
+          echo "EXT=$EXT" >> "$GITHUB_ENV"
+      - name: run the tests
+        run: |
+          ./modmanifest_test
+          ./modfs_test
+          ./modsmenu_test "hello$EXT"
+          ./plugins_test plugin_modules "hello$EXT"
+      - name: the build's check of the generated code's marks (cmake/modsmenu_marks.cmake) on made-up generated code
+        run: |
+          cmake --version | head -1
+          cmake -DWORK="$RUNNER_TEMP/marks_test" -P tests/modsmenu/marks_test.cmake
+      - name: run tests/modfs and tests/plugins on a case-sensitive volume (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -quiet -size 64m -fs "Case-sensitive APFS" -volname modfs-cs "$RUNNER_TEMP/cs.dmg"
+          mkdir -p "$RUNNER_TEMP/cs"
+          hdiutil attach -quiet -nobrowse -mountpoint "$RUNNER_TEMP/cs" "$RUNNER_TEMP/cs.dmg"
+          TMPDIR="$RUNNER_TEMP/cs" ./modfs_test
+          TMPDIR="$RUNNER_TEMP/cs" ./modsmenu_test "hello$EXT"
+          TMPDIR="$RUNNER_TEMP/cs" ./plugins_test plugin_modules "hello$EXT"
+          hdiutil detach -quiet "$RUNNER_TEMP/cs"
+      - name: address, undefined-behaviour and thread sanitizers (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          for s in address,undefined thread; do
+            clang -std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=$s -fno-sanitize-recover=all \
+                $INCS tests/modfs/test_main.c $SRCS -pthread -o modfs_test_san
+            ./modfs_test_san
+          done
+          clang -std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+              $INCS tests/modmanifest/test_main.c src/game/modmanifest.c xboxrecomp/src/enhance/recomp_cfg.c \
+              -o modmanifest_test_san
+          ./modmanifest_test_san
+          for s in address,undefined thread; do
+            clang -std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=$s -fno-sanitize-recover=all \
+                $INCS $MM_INCS $MM_SRCS src/game/plugins_posix.c $SRCS -pthread -ldl -o modsmenu_test_san
+            ./modsmenu_test_san hello.so
+          done
+          clang -std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+              $INCS $PL_INCS $PL_SRCS src/game/plugins_posix.c $SRCS -pthread -ldl -o plugins_test_san
+          ./plugins_test_san plugin_modules hello.so
+
+  android-ndk:
+    if: github.repository != 'xenophobentx/takedawn'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: the intended commit
+        shell: bash
+        run: |
+          git log -2 --format='%H %s'
+          test "$(git rev-parse HEAD^)" = "$EXPECT_BASE"
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/modfs-xplat.yml
+      - name: toolkit (xboxrecomp at the pinned commit; kernel, platform, enhance, overlay, install, runtime)
+        run: |
+          git init -q xboxrecomp
+          git -C xboxrecomp sparse-checkout set src/kernel src/platform src/enhance src/overlay src/install templates/runtime
+          git -C xboxrecomp fetch -q --depth 1 --filter=blob:none https://github.com/xenophobentx/xboxrecomp.git "$XBOXRECOMP_REF"
+          git -C xboxrecomp checkout -q FETCH_HEAD
+      - name: compile and link for arm64 Android 13 (API 33, the APK's minSdk); plugins compiled out; not run
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          [ -d "$NDK" ] || { echo "no NDK on this runner image"; exit 1; }
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+          "$CC" --version | head -1
+          for f in $SRCS tests/modfs/test_main.c src/game/modsmenu.c src/game/menuentry.c tests/modsmenu/test_main.c \
+                   src/game/plugins.c src/game/plugins_posix.c xboxrecomp/src/install/xr_sha256.c; do
+            "$CC" -std=gnu11 -O2 -Wall -Wextra -Werror $INCS $MM_INCS -Iinclude -Ixboxrecomp/src/install -c "$f" -o "$(echo "$f" | tr / _).o"
+          done
+          "$CC" src_game_modfs.c.o src_game_modmanifest.c.o xboxrecomp_src_enhance_recomp_cfg.c.o tests_modfs_test_main.c.o -o modfs_test_android
+          "$CC" src_game_modfs.c.o src_game_modmanifest.c.o xboxrecomp_src_enhance_recomp_cfg.c.o src_game_modsmenu.c.o src_game_menuentry.c.o tests_modsmenu_test_main.c.o src_game_plugins.c.o src_game_plugins_posix.c.o xboxrecomp_src_install_xr_sha256.c.o -o modsmenu_test_android
+          file modsmenu_test_android
+          file modfs_test_android
