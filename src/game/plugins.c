@@ -93,8 +93,9 @@ static void approvals_read(void)
 {
     char why[200] = "";
     recomp_cfg *cfg = NULL;
+    char *text = NULL;
+    size_t len = 0;
     FILE *f;
-    long size = -1;
 
     s_napproved = 0;
     s_approvals_ok = 0;
@@ -103,26 +104,42 @@ static void approvals_read(void)
     f = fopen(s_approval_file, "rb");
     if (!f)
         return;                             /* none yet: nothing is approved */
-    if (fseek(f, 0, SEEK_END) == 0)
-        size = ftell(f);
+    text = malloc(MAX_APPROVAL_FILE + 2);   /* read once: what is checked is what is parsed */
+    if (text) {
+        len = fread(text, 1, MAX_APPROVAL_FILE + 1, f);
+        text[len] = 0;
+    }
     fclose(f);
-    if (size < 0 || size > MAX_APPROVAL_FILE)
+    if (!text || len > MAX_APPROVAL_FILE)
         snprintf(why, sizeof why, "larger than %d bytes, or not readable", MAX_APPROVAL_FILE);
-    else if (!(cfg = recomp_cfg_load_file(s_approval_file, why, sizeof why)))
+    else if (memchr(text, 0, len))
+        snprintf(why, sizeof why, "a NUL byte");
+    else if (!(cfg = recomp_cfg_load_string(text, s_approval_file, why, sizeof why)))
         ;                                   /* why says */
     else if (recomp_cfg_type_of(cfg, "approved") != RCFG_ARRAY && recomp_cfg_type_of(cfg, "approved") != RCFG_NONE)
         snprintf(why, sizeof why, "approved must be a list of strings");
     else {
-        size_t n = recomp_cfg_array_len(cfg, "approved");
+        size_t n = recomp_cfg_array_len(cfg, "approved"), dropped = 0;
         if (!s_approved)
             s_approved = calloc(MAX_APPROVALS, sizeof *s_approved);
-        for (size_t i = 0; s_approved && i < n && s_napproved < MAX_APPROVALS; i++) {
+        for (size_t i = 0; s_approved && i < n; i++) {
             const char *e = recomp_cfg_array_string(cfg, "approved", i, "");
-            if (recomp_cfg_array_type(cfg, "approved", i) == RCFG_STRING && strlen(e) < sizeof *s_approved)
-                memcpy(s_approved[s_napproved++], e, strlen(e) + 1);
+            size_t el = strlen(e);
+            if (recomp_cfg_array_type(cfg, "approved", i) != RCFG_STRING || el >= sizeof *s_approved
+                    || s_napproved >= MAX_APPROVALS) {
+                dropped++;
+                continue;
+            }
+            for (size_t k = 0; k <= el; k++)    /* ids and "sha256:" are lower case; the digits may be either */
+                s_approved[s_napproved][k] = (char)(e[k] >= 'A' && e[k] <= 'Z' ? e[k] + ('a' - 'A') : e[k]);
+            s_napproved++;
         }
         s_approvals_ok = s_approved != NULL;
+        if (dropped)
+            XR_NOTICE("[PLUGIN] approval file: %d entries not used (not a string, longer than an approval, or past %d): %s\n",
+                      (int)dropped, MAX_APPROVALS, s_approval_file);
     }
+    free(text);
     recomp_cfg_free(cfg);
     if (!s_approvals_ok)
         XR_NOTICE("[PLUGIN] approval file not used, no plugin is approved (%s): %s\n", why[0] ? why : "not TOML",
@@ -241,6 +258,7 @@ static void load_one(int i)
     s_api[i].mod_id = api_mod_id;
     s_api[i].host_version = api_host_version;
     memset(&info, 0, sizeof info);
+    info.struct_size = (uint32_t)sizeof info;   /* the room the plugin has: it writes no field past it */
     rc = init_fn(&s_api[i], &info);
     if (rc != TD_OK) {
         snprintf(why, sizeof why, "its init returned %d", (int)rc);
@@ -249,12 +267,13 @@ static void load_one(int i)
         return;
     }
     memset(&s_info[i], 0, sizeof s_info[i]);
-    if (info.struct_size >= offsetof(td_plugin_info, user) + sizeof info.user) {
+    if (info.struct_size >= offsetof(td_plugin_info, user) + sizeof info.user) {   /* a larger size: only ours is read */
         s_info[i].on_shutdown = info.on_shutdown;
         s_info[i].user = info.user;
     }
     s_started[i] = 1;
-    s_order[s_norder++] = i;
+    if (s_norder < BO3_MODFS_MAX_MODS)
+        s_order[s_norder++] = i;
     if (!s_atexit) {
         s_atexit = 1;
         atexit(run_shutdowns);
@@ -283,6 +302,11 @@ void bo3_plugins_init(const char *host_version)
     memset(s_slots, 0, sizeof s_slots);
     s_nslots = n;
     s_running = 0;
+    /* A second start (only the unit test makes one) begins a new list: the
+     * plugins of the first stay loaded, and their on_shutdown is forgotten. */
+    s_norder = 0;
+    memset(s_started, 0, sizeof s_started);
+    memset(s_info, 0, sizeof s_info);
     for (int i = 0; i < n; i++)
         declared += bo3_modfs_mod(i)->manifest.plugin && bo3_modfs_mod(i)->manifest.plugin_path[0];
     if (!declared) {

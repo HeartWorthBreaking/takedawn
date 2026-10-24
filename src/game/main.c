@@ -2030,13 +2030,15 @@ static int host_main(void)
             extern void bo3_plugins_init(const char *host_version);
             extern const char *bo3_version_number(void);
             const char *ap = getenv("TAKEDAWN_PLUGIN_APPROVALS");
-            if (ap)
-                snprintf(path, sizeof(path), "%s", ap);
-            else if (sl)
-                snprintf(path, sizeof(path), "%.*s/plugin-approvals.toml", (int)(sl - set), set);
-            else
-                snprintf(path, sizeof(path), "%s/plugin-approvals.toml", s_save_dir);
-            bo3_plugins_approval_file(path);
+            if (ap) {
+                bo3_plugins_approval_file(ap);  /* as given: too long means none (plugins.c), never cut short */
+            } else {
+                if (sl)
+                    snprintf(path, sizeof(path), "%.*s/plugin-approvals.toml", (int)(sl - set), set);
+                else
+                    snprintf(path, sizeof(path), "%s/plugin-approvals.toml", s_save_dir);
+                bo3_plugins_approval_file(path);
+            }
             bo3_plugins_init(bo3_version_number());
         }
     }

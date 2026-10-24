@@ -6,6 +6,7 @@
  * Windows (clang or MinGW):  clang -shared -Iinclude hello.c -o hello.asi
  * Windows (MSVC):            cl /LD /Iinclude hello.c /Fe:hello.asi
  * Linux:                     cc -shared -fPIC -fvisibility=hidden -Iinclude hello.c -o libhello.so
+ * macOS:                     cc -dynamiclib -fvisibility=hidden -Iinclude hello.c -o libhello.dylib
  */
 #include "takedawn_plugin.h"
 

@@ -29,8 +29,8 @@ these hold:
 1. plugins are not turned off: `TAKEDAWN_PLUGINS=0` turns them all off, whatever
    anything else says;
 2. this system loads plugins: Windows (`.asi` or `.dll`) and Linux (`.so`);
-   macOS (`.dylib`) only with `TAKEDAWN_PLUGINS=1`, because it has not been
-   tried there yet; never on Android;
+   macOS (`.dylib`) only with `TAKEDAWN_PLUGINS=1` until it has been tried
+   there; never on Android;
 3. its mod is usable and on (the mod list; the MODS page);
 4. its `mod.toml` names a module for this system, for a plugin API version
    this Takedawn has;
@@ -93,8 +93,10 @@ the start and never writes it.
 approved = ["example.hello-plugin sha256:50825ef19b83bf3766982137e00a2c6e04945580268b83b263f8a48f5f9f1cb2"]
 ```
 
-Each entry is a mod id, a space, `sha256:` and the module's SHA-256 in lower
-case. When a plugin is not approved, the log gives the exact entry to add:
+Each entry is a mod id, a space, `sha256:` and the module's SHA-256 (64 hex
+digits, either case). At most 256 entries are used; an entry that is not a
+string or is too long to be one is skipped, and the log says how many were.
+When a plugin is not approved, the log gives the exact entry to add:
 
 ```
 [PLUGIN] example.hello-plugin: not run: not approved. It is native code and runs with your permissions; to allow this module, add "example.hello-plugin sha256:50825e..." to approved in C:\...\plugin-approvals.toml
@@ -133,6 +135,7 @@ with its `mod.toml`. Build it as a shared library:
 clang -shared -Iinclude examples/plugins/hello/hello.c -o hello.asi                 (Windows, clang / MinGW)
 cl /LD /Iinclude examples\plugins\hello\hello.c /Fe:hello.asi                       (Windows, MSVC)
 cc -shared -fPIC -fvisibility=hidden -Iinclude examples/plugins/hello/hello.c -o libhello.so   (Linux)
+cc -dynamiclib -fvisibility=hidden -Iinclude examples/plugins/hello/hello.c -o libhello.dylib  (macOS)
 ```
 
 The API is plain C: fixed-size integers, function pointers, and structures
@@ -144,7 +147,9 @@ be built with another compiler than Takedawn's. The rules:
   `api` the manifest declares, `takedawn_plugin_init` is not called.
 - `takedawn_plugin_init` is called once, on the main thread, before the game
   starts, and should return quickly. `api` stays valid until the process
-  ends; `info` is the plugin's to fill in.
+  ends. `info` is the plugin's to fill in: on entry every field is zero and
+  `info->struct_size` is the size Takedawn made room for; write no field that
+  ends past it (a newer header may know more fields than this Takedawn).
 - `api->log` may be called from any thread: one line in the game's log as
   `[PLUGIN <mod id>] <text>`, at most 1023 bytes kept, control characters
   shown as `?`.
@@ -163,32 +168,94 @@ New versions of the API add to it: a structure only gains fields at its end
 ## How it works
 
 `src/game/plugins.c` decides; `plugins_win32.c` and `plugins_posix.c` load.
-On Windows the module is opened with only reading shared, so that it cannot
-be written, replaced or deleted until it is loaded; it is hashed through that
-handle and loaded by its full path with `LoadLibraryExW` and
-`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`: its own
-dependencies come from its folder or System32, never the current folder or
-`PATH`, and nothing process-wide is changed. After loading, the module the
-system mapped must be the file that was hashed. On Linux it is opened without
-following links, hashed, loaded with `dlopen(RTLD_NOW | RTLD_LOCAL)`, and the
-path must still be the same file (device and inode) afterwards; the
-module's own dependencies are found the system's way (its rpath,
-`LD_LIBRARY_PATH`). Someone who can write the mod folder while the game starts
-is trusted as much as the module itself, as for every mod file.
+On every system the bytes that are approved are the bytes that are loaded,
+and that is settled before the library's own start-up code runs:
+
+- **Windows.** The module is opened with only reading shared (nobody can
+  write, replace, rename or delete it while it is held) and hashed through
+  that handle. The handle gives the file's real place, every junction or
+  link on the way resolved; every folder of that path, from the drive down,
+  is held without delete sharing (none can be renamed, deleted or turned into
+  a junction), and the real place is checked once more. `LoadLibraryExW` then
+  loads that path, with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+  LOAD_LIBRARY_SEARCH_SYSTEM32`: the module's own dependencies come from its
+  folder or System32, never the current folder or `PATH`, and nothing
+  process-wide is changed. After loading, the kernel's name for the mapped
+  file must be the held file's - a second check; a mismatch there would be
+  found only after the start-up code ran.
+- **Linux.** The module is opened without following a link, and copied into
+  a memory file (`memfd`) while it is hashed; the copy is sealed so that
+  nothing can change it and loaded from `/proc/self/fd/<n>` with
+  `dlopen(RTLD_NOW | RTLD_LOCAL)`. A change to the mod folder's file after it
+  was read never reaches what is loaded. A system without `memfd_create` or
+  `/proc` refuses plugins (the log says why).
+- **macOS.** The module is copied while it is hashed into a file in a new
+  folder of its own in the user's temporary folder (`0700`), made read only,
+  loaded by that path with `dlopen`, and removed afterwards; that path must
+  still name the copy after loading. Only the user's own programs can reach
+  the copy. The release bundle is sealed ad hoc, without the hardened runtime
+  (`tools/release/build-macos.sh`), so the system does not demand a plugin
+  signed by the same team; on Apple silicon a module must still be signed,
+  and the linker's own ad hoc signature is enough (the copy has the same
+  bytes, so its signature holds).
+
+Because Linux and macOS load a copy, a module's own dependencies are found
+the system's way (its rpath, `LD_LIBRARY_PATH`, `DYLD_*`): `$ORIGIN` and
+`@loader_path` name the copy's place, not the mod folder. Keep a plugin to
+one library, or link its dependencies statically.
+
+What this does not cover: a program running as the same user can change the
+mod folder, the approval file or (on macOS) the private copy, as it can
+change the game itself; a writable mapping of the module made before the game
+opened it is not seen. Takedawn checks what loads, not what it does.
 
 `tests/plugins` builds test modules of every kind and checks the rules above
 on folders it makes (`ctest -R bo3_plugins`); each test module records the
-moment it is loaded, so "never loaded" is checked directly.
+moment it is loaded, so "never loaded" is checked directly. On Windows it
+also hashes a module through a junction, points the junction elsewhere and
+checks that the module mapped is the one hashed; on every system it rewrites
+a module after the hash and checks that the rewrite is not what loads.
+
+## Troubleshooting
+
+| The log says | Why, and what to do |
+|---|---|
+| `not run: not approved` | add the line it gives to the approval file, after checking where the module came from |
+| `not run: ... is not a regular file in the mod's folder` | the path in `mod.toml` names nothing, a folder, or goes through a link or junction |
+| `not run: it needs plugin API N` | the plugin is for a newer Takedawn |
+| `not started: it was built for plugin API N, its mod.toml says M` | the module and its manifest do not match: ask the plugin's author |
+| `not started: it does not export ...` | not a Takedawn plugin, or built without `TD_EXPORT` |
+| `not started: its init returned N` | the plugin's own refusal: its earlier log lines say why |
+| `plugins are off (...)` | `TAKEDAWN_PLUGINS=0`, an Android build, or macOS without `TAKEDAWN_PLUGINS=1` |
+| `approval file not used` | the file is not a list of strings, or larger than 64 KiB: nothing is approved |
+| `no sealed copy can be made` (Linux) | the kernel or a sandbox does not allow `memfd_create` |
+| `the module does not load (...)` | the system's own reason: a missing dependency, another architecture |
+
+A mod whose `[plugin]` table breaks the rules is invalid as a whole: its
+files are not used either (the MODS page says INVALID and why).
+
+## Compatibility
+
+- A `mod.toml` without `[plugin]` means what it meant before; mods, the mod
+  list and the MODS page work as before.
+- A Takedawn without plugin support ignores `[plugin]` and uses the mod's
+  files.
+- The plugin API is versioned (`api`, `takedawn_plugin_api_version`). A
+  Takedawn loads only versions it has; structures grow only at their end.
 
 ## Verified
 
-Windows 11 (build 26300), clang 23.1.2 (llvm-mingw), 2026-10-24:
-`tests/plugins` (approved, not approved, other bytes, changed bytes, mod off,
-`TAKEDAWN_PLUGINS=0`, a bad and a missing approval file, missing and wrong
-exports, a newer API, an init failure, a missing module, a folder named like
-one, a junction on the path, undeclared modules beside a declared one, load
-order, the example plugin's log line and its shutdown line) and the existing
-`tests/modfs`, `tests/modmanifest` and `tests/modsmenu`.
+Windows 11 (build 26300), clang 23.1.2 (llvm-mingw), 2026-10-24: the game
+builds; `tests/plugins` (approved, not approved, other bytes, changed bytes,
+mod off, `TAKEDAWN_PLUGINS=0`, a bad, a missing and a too long approval
+path, upper-case digits, unused entries, missing and wrong exports, a newer
+API, an init failure, a missing module, a folder named like one, a device
+name, a junction on the path, the junction pointed elsewhere after the hash,
+a rewrite after the hash, undeclared modules beside a declared one, load
+order, `info`'s size, eighty restarts, the example plugin's log and shutdown
+lines) and the existing `tests/modfs`, `tests/modmanifest` and
+`tests/modsmenu`.
 
-Not checked: the game itself with a plugin; Linux, macOS and Android builds
-and runs; a plugin built with MSVC.
+Not checked: Linux and macOS (written for them, not yet built or run there);
+Android (expected to build with plugins off; not built); the game itself
+with a plugin; a plugin built with MSVC.

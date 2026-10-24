@@ -274,6 +274,19 @@ static void plugin(void)
     BAD(HEAD "[plugin]\napi = 1\nwindows = \"x.asi.txt\"\n", "must name a .asi or .dll file");
     BAD(HEAD "[plugin]\napi = 1\nlinux = \"x.dll\"\n", "must name a .so file");
     BAD(HEAD "[plugin]\napi = 1\nmacos = \"x.so\"\n", "must name a .dylib file");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"NUL.dll\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"con.asi\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"bin/Com1.asi\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"LPT9.x.dll\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"aux .asi\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"prn/x.asi\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nwindows = \"CONOUT$.dll\"\n", "Windows device name");
+    BAD(HEAD "[plugin]\napi = 1\nlinux = \"nul.so\"\n", "Windows device name");
+    CHECK(parse(HEAD "[plugin]\napi = 1\nwindows = \"console.asi\"\nlinux = \"bin/nullify.so\"\n") && s_m.plugin,
+          "names that only start like a device are fine: %s", s_err);
+    CHECK(parse(HEAD "[plugin]\napi = 1\nwindows = \"com10.asi\"\nmacos = \"lpt0/auxiliary.dylib\"\n") && s_m.plugin,
+          "COM10, LPT0 and AUXILIARY are not devices: %s", s_err);
+    CHECK(parse(HEAD "[plugin]\napi = 1\nwindows = \"bin/com.asi\"\n") && s_m.plugin, "COM alone is not a device: %s", s_err);
     CHECK(parse(HEAD "[plugin]\napi = 1\nwindows = \"files2/x.asi\"\n") && s_m.plugin, "files2 is not files: %s", s_err);
     CHECK(parse(HEAD "[plugin]\napi = 1\nwindows = \"bin/files/x.asi\"\n") && s_m.plugin,
           "a folder named files deeper down is not the mod's files folder: %s", s_err);

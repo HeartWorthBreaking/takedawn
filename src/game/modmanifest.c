@@ -144,6 +144,31 @@ static int ends_nocase(const char *s, size_t n, const char *end)
     return 1;
 }
 
+/* A Windows device name as a path part (CON, PRN, AUX, NUL, CLOCK$, CONIN$,
+ * CONOUT$, COM1-9, LPT1-9), with or without an ending and in any case: the
+ * part up to its first dot, trailing spaces dropped, as Windows reads it.
+ * Refused on every system, so a manifest means the same everywhere. */
+static int device_name(const char *p, size_t len)
+{
+    static const char *const names[] = { "con", "prn", "aux", "nul", "clock$", "conin$", "conout$" };
+    char low[8];
+    size_t b = 0;
+
+    while (b < len && p[b] != '.')
+        b++;
+    while (b && p[b - 1] == ' ')
+        b--;
+    if (b == 0 || b >= sizeof low)
+        return 0;
+    for (size_t i = 0; i < b; i++)
+        low[i] = (char)lower((unsigned char)p[i]);
+    low[b] = 0;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(low, names[i]))
+            return 1;
+    return b == 4 && (!strncmp(low, "com", 3) || !strncmp(low, "lpt", 3)) && low[3] >= '1' && low[3] <= '9';
+}
+
 /* A module path: relative, plain ASCII parts (the mod folders' own rule:
  * no "." or "..", no trailing dot or space, none of <>:"|?* or a control
  * character), not in the mod's files folder (whose contents the game reads
@@ -174,6 +199,11 @@ static int module_path_ok(const char *v, int p, char *why, size_t wn)
                          s_platforms[p].key);
                 return 0;
             }
+        if (device_name(v + start, len)) {
+            snprintf(why, wn, "plugin.%s: a part of the path is a Windows device name (CON, NUL, COM1 ...)",
+                     s_platforms[p].key);
+            return 0;
+        }
         if (part++ == 0 && len == 5 && lower((unsigned char)v[start]) == 'f' && ends_nocase(v + start, 5, "files")) {
             snprintf(why, wn, "plugin.%s: the module may not be in the files folder", s_platforms[p].key);
             return 0;

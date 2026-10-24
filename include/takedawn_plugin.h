@@ -71,10 +71,13 @@ typedef struct td_host_api {
     const char *(TD_CALL *host_version)(td_host *host);
 } td_host_api;
 
-/* What a plugin tells Takedawn. takedawn_plugin_init fills it in; Takedawn
- * copies what it knows of it (struct_size) when init returns. */
+/* What a plugin tells Takedawn. On entry to takedawn_plugin_init, struct_size
+ * is the size Takedawn made room for and every field is zero: write no field
+ * that ends past that size (a newer header may have more fields than this
+ * Takedawn). Set struct_size to the size the plugin filled in, or leave it;
+ * Takedawn reads only fields that both sizes cover, when init returns. */
 typedef struct td_plugin_info {
-    uint32_t struct_size;           /* sizeof (td_plugin_info) as the plugin built it */
+    uint32_t struct_size;           /* in: Takedawn's size; out: what the plugin filled in */
     /* Called once at a normal exit of the process, in reverse order of
      * loading, on the thread that ends it. Best effort: not on a crash, a
      * forced end, or the system's own quick exit paths. May be NULL. */

@@ -4,10 +4,12 @@
 # refused. The modules are test_module.c built once per kind, and the example
 # plugin (examples/plugins/hello). No game data, no guest.
 #   cmake --build <build> --target bo3_plugins_test && ctest -R bo3_plugins
-set(_kinds GOOD NOINIT NOVERSION NEWVERSION INITFAIL MARKER ORDER_A ORDER_B)
+set(_kinds GOOD NOINIT NOVERSION NEWVERSION INITFAIL MARKER ORDER_A ORDER_B BIGINFO)
 set(_mods_dir ${CMAKE_CURRENT_BINARY_DIR}/modules)
 if(WIN32)
     set(_ext .asi)
+elseif(APPLE)
+    set(_ext .dylib)
 else()
     set(_ext .so)
 endif()
