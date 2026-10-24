@@ -261,9 +261,9 @@ FIRST MOD, WITH A DESCRIPTION.
   many mods are installed and how many are on.
 - **A mod that brings native code** (a `[plugin]` with a module for this system) shows `CODE` (its code approved from the
   next start) or `CODE?` (not approved). A on it goes
-  `OFF -> ON (its files only) -> APPROVE <module> <hash> -> ON + CODE -> OFF`.
-  - Turning a mod on uses its files only. Its code is approved only by A on the APPROVE step, which shows the module, its
-    hash and a warning, and then APPLY.
+  `OFF -> ON (its files only) -> APPROVE CODE -> ON + CODE -> OFF`.
+  - Turning a mod on uses its files only. Its code is approved only by A on the APPROVE CODE step, which shows the module,
+    its hash and a warning, and then APPLY.
   - A mod turned off, or on without its code, loses its approval.
   - With the cursor on such a mod, the two lines below show its code now (`CODE RUNNING`, `CODE NOT LOADED - SEE LOG`,
     ...) and its module and hash.

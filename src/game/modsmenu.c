@@ -51,15 +51,15 @@
  *
  * Native code (plugins.h, docs/native-plugins.md): a mod with a module for
  * this system shows CODE (approved from the next start) or CODE? (not), and
- * A goes OFF -> ON (its files only) -> APPROVE <module> <hash> -> ON + CODE
- * -> OFF. The APPROVE step hashes the module (never loads it) and shows the
- * warning on the two lines below; only A again approves those bytes, moving
- * away cancels. Nothing is written before APPLY, which removes approvals
- * first, then saves the mod list, then adds approvals: a failure stops what
- * follows, so what is saved never allows more code than was chosen. A mod
- * turned off, or on without its code, loses its approval. The plugins of
- * this start stay as they are: a change is for the next start, and a
- * running plugin runs until Takedawn exits.
+ * A goes OFF -> ON (its files only) -> APPROVE CODE -> ON + CODE -> OFF.
+ * The APPROVE step hashes the module (never loads it) and shows the warning,
+ * the module and its hash on the two lines below; only A again approves those
+ * bytes, moving away cancels. Nothing is written before APPLY, which removes
+ * approvals first, then saves the mod list, then adds approvals: a failure
+ * stops what follows, so what is saved never allows more code than was
+ * chosen. A mod turned off, or on without its code, loses its approval. The
+ * plugins of this start stay as they are: a change is for the next start,
+ * and a running plugin runs until Takedawn exits.
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -364,11 +364,12 @@ static void module_name(int i, char *out, size_t n, size_t max)
 }
 
 /* A mod's line: its name and state, and for native code CODE (approved from
- * the next start) or CODE?; while its approval waits for A, the module and
- * the first 8 digits of its hash instead. */
+ * the next start) or CODE?; while its approval waits for A, APPROVE CODE (the
+ * module and its hash are on the information line: the line under the
+ * cursor is drawn larger, and 28 characters is what fits there). */
 static void mod_line(int i, char *buf, size_t bn)
 {
-    char name[LABEL_CH], mod[LABEL_CH];
+    char name[LABEL_CH];
     size_t cut = s_confirm == i ? 14 : NAME_CH;
     shown(name, sizeof name, mod_name(bo3_modfs_mod(i)));
     if (strlen(name) > cut) {
@@ -378,8 +379,7 @@ static void mod_line(int i, char *buf, size_t bn)
         memcpy(name + k, "..", 3);
     }
     if (s_confirm == i) {
-        module_name(i, mod, sizeof mod, 12);
-        snprintf(buf, bn, "%s  APPROVE %s %.8s", name, mod, s_code_sha[i]);
+        snprintf(buf, bn, "%s  APPROVE CODE", name);
     } else {
         snprintf(buf, bn, "%s  %s%s", name, state_word(i), !has_code(i) ? "" : code_chosen(i) ? "  CODE" : "  CODE?");
     }
@@ -447,9 +447,10 @@ static void code_text(int i, char *det, size_t dn, char *info, size_t in)
     char mod[LABEL_CH];
     int differs = code_differs(i), next = chosen(i) && code_chosen(i);
 
-    if (s_confirm == i) {
+    if (s_confirm == i) {                    /* the bytes A approves: module and hash */
+        module_name(i, mod, sizeof mod, 12);
         snprintf(det, dn, "NATIVE CODE RUNS WITH YOUR PERMISSIONS");
-        snprintf(info, in, "ONLY FROM SOURCES YOU TRUST - A: APPROVE");
+        snprintf(info, in, "TRUSTED SOURCES ONLY: %s %.8s", mod, s_code_sha[i]);
         return;
     }
     module_name(i, mod, sizeof mod, 24);

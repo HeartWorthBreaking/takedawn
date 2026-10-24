@@ -1212,11 +1212,11 @@ int main(int argc, char **argv)
         /* 2, 3: ON -> APPROVE: hashed, the module, the warning */
         cursor_to(lx);
         press_a();
-        snprintf(want, sizeof want, "C.MIXED  APPROVE MIXED%s %s", uext, h8);
-        CHECK(same_text(line(lx), want) && same_text(line(ap + 1), "NATIVE CODE RUNS WITH YOUR PERMISSIONS")
-              && same_text(line(ap + 2), "ONLY FROM SOURCES YOU TRUST - A: APPROVE") && same_text(line(ap), "NO CHANGES")
-              && !slurp(s_appr), "3: the module and its hash, the warning; nothing chosen yet: %s / %s / %s", line(lx),
-              line(ap + 1), line(ap + 2));
+        snprintf(want, sizeof want, "TRUSTED SOURCES ONLY: MIXED%s %s", uext, h8);
+        CHECK(same_text(line(lx), "C.MIXED  APPROVE CODE") && same_text(line(ap + 1), "NATIVE CODE RUNS WITH YOUR PERMISSIONS")
+              && same_text(line(ap + 2), want) && same_text(line(ap), "NO CHANGES")
+              && !slurp(s_appr), "3: APPROVE CODE; the warning, the module and its hash; nothing chosen yet: %s / %s / %s",
+              line(lx), line(ap + 1), line(ap + 2));
         /* 4: moving away, or B, cancels */
         cursor_to(la);
         CHECK(same_text(line(lx), "C.MIXED  ON  CODE?") && same_text(line(ap), "NO CHANGES"), "4: moved away: cancelled (%s)",
@@ -1303,14 +1303,39 @@ int main(int argc, char **argv)
         CHECK(pstate("c.mixed") == BO3_PLUGIN_NOT_APPROVED && same_text(line(lx), "C.MIXED  ON  CODE?")
               && same_text(line(ap + 1), "CODE CHANGED - APPROVE AGAIN"), "9: changed bytes: %s / %s", line(lx), line(ap + 1));
         press_a();
-        snprintf(want, sizeof want, "C.MIXED  APPROVE MIXED%s %s", uext, h8);
-        CHECK(same_text(line(lx), want), "9: the new bytes' hash shown: %s", line(lx));
+        snprintf(want, sizeof want, "TRUSTED SOURCES ONLY: MIXED%s %s", uext, h8);
+        CHECK(same_text(line(lx), "C.MIXED  APPROVE CODE") && same_text(line(ap + 2), want), "9: the new bytes' hash shown: %s",
+              line(ap + 2));
         press_a();
         cursor_to(ap);
         press_a();
         snprintf(want, sizeof want, "\"c.mixed sha256:%s\"", hx);
         CHECK(strstr(slurp(s_appr), want) && count_of(slurp(s_appr), "c.mixed") == 1, "9: approved again, one entry: %s",
               slurp(s_appr));
+        press_b();
+
+        /* The APPROVE step fits the title's lines (game run L1, 2026-10-25: the line under the cursor is drawn larger;
+         * "SILVER LAKE MAGENTA ROAD  ON", 28 characters, showed whole there, "HELLO PLUGIN  APPROVE HELLO.ASI
+         * 412D84F0" was cut after "412D8"; the other lines showed 44 characters whole). The longest name and module
+         * name there can be: the line under the cursor at most 28, the two lines below at most 44, and the warning and
+         * the module still said in full. */
+        {
+            char t[300];
+            snprintf(t, sizeof t, "id = \"w.wide\"\nname = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ\"\n%s",
+                     plugin_decl("averylongmodulefilename" EXT));
+            mk("codew/w/mod.toml", t);
+            mk("codew/w/averylongmodulefilename" EXT, "WIDE");
+        }
+        open_page("codew");
+        cursor_to(0);
+        press_a();
+        CHECK(same_text(line(0), "ABCDEFGHIJKL..  APPROVE CODE") && strlen(line(0)) <= 28,
+              "APPROVE CODE fits the line under the cursor (<= 28): %s (%u)", line(0), (unsigned)strlen(line(0)));
+        CHECK(same_text(line(2), "NATIVE CODE RUNS WITH YOUR PERMISSIONS") && strlen(line(3)) <= 44
+              && !strncmp(line(3), "TRUSTED SOURCES ONLY: AVERYLONGM.. ", 35) && strlen(line(3)) == 35 + 8,
+              "the warning and the module with its hash fit the lines below (<= 44): %s / %s", line(2), line(3));
+        cursor_to(1);
+        CHECK(same_text(line(0), "ABCDEFGHIJKLMNOPQRSTUV..  ON  CODE?"), "moved away: cancelled (%s)", line(0));
         press_b();
 
         /* 11: a module that is not there: no APPROVE, said so */

@@ -95,12 +95,11 @@ Driver Details > Settings > MODS lists a mod with a module for this system
 with `CODE` (its code is approved from the next start) or `CODE?` (it is
 not). A on such a mod goes:
 
-    OFF  ->  ON (its files only)  ->  APPROVE <module> <hash>  ->  ON + CODE  ->  OFF
+    OFF  ->  ON (its files only)  ->  APPROVE CODE  ->  ON + CODE  ->  OFF
 
 - **Turning a mod on never approves its code.** ON uses its files only.
-- **APPROVE** hashes the module, the way a start hashes it, without loading it. The line shows the module's file name and
-  the first 8 digits of its SHA-256. The two lines below say
-  `NATIVE CODE RUNS WITH YOUR PERMISSIONS` / `ONLY FROM SOURCES YOU TRUST - A: APPROVE`.
+- **APPROVE CODE** hashes the module, the way a start hashes it, without loading it. The two lines below say
+  `NATIVE CODE RUNS WITH YOUR PERMISSIONS` / `TRUSTED SOURCES ONLY: <module> <first 8 digits of its SHA-256>`.
   - Only A again approves those bytes.
   - Moving the cursor away, B, or another page cancels.
 - **Nothing is written before APPLY.** When an approval is waiting, APPLY reads `APPLY - APPROVES CODE - RESTART REQUIRED`.
