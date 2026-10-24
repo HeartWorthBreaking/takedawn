@@ -267,6 +267,76 @@ static const char *plat(void)
     return bo3_manifest_platform();
 }
 
+/* The first "copy=<address>" of an init marker: which loaded copy ran it. */
+static void copy_of(const char *name, char *out, size_t n)
+{
+    char *t = marker(name), *c = t ? strstr(t, "copy=") : NULL;
+    size_t k = 0;
+    out[0] = 0;
+    if (c) {
+        c += 5;
+        while (c[k] && c[k] != '\n' && k + 1 < n)
+            k++;
+        memcpy(out, c, k);
+        out[k] = 0;
+    }
+    free(t);
+}
+
+/* Every line of an init marker says inits=1: each init ran in a copy of its own. */
+static int all_first_inits(const char *name, int *lines)
+{
+    char *t = marker(name), *p = t;
+    int ok = t != NULL;
+    *lines = 0;
+    while (p && *p) {
+        char *e = strchr(p, '\n');
+        (*lines)++;
+        if (!strstr(p, "inits=1") || (e && strstr(p, "inits=1") > e))
+            ok = 0;
+        p = e ? e + 1 : NULL;
+    }
+    free(t);
+    return ok;
+}
+
+/* At exit, after the plugins' own on_shutdown (registered later, so run
+ * first): each running plugin of the last start shut down, newest first. */
+static void check_shutdown(void)
+{
+    char *t, *good, *hello;
+    fflush(stderr);
+    t = read_file(s_log);
+    good = t ? strstr(t, "[PLUGIN t.good] shutdown") : NULL;
+    hello = t ? strstr(t, "[PLUGIN example.hello-plugin] goodbye") : NULL;
+    if (good && hello && good < hello) {
+        printf("shutdown: t.good, then example.hello-plugin (newest first): ok\n");
+    } else {
+        printf("FAIL shutdown: t.good %s, example.hello-plugin %s, order %s\n", good ? "ran" : "missing",
+               hello ? "ran" : "missing", good && hello ? "wrong" : "-");
+        fflush(stdout);
+        free(t);
+        _exit(1);
+    }
+    free(t);
+}
+
+#if defined(__linux__)
+#include <dirent.h>
+/* Open descriptors of this process. */
+static int open_fds(void)
+{
+    DIR *d = opendir("/proc/self/fd");
+    struct dirent *e;
+    int n = 0;
+    while (d && (e = readdir(d)) != NULL)
+        n += e->d_name[0] != '.';
+    if (d)
+        closedir(d);
+    return n;
+}
+#endif
+
 static void declare(char *out, size_t n, int api, const char *rel)
 {
     snprintf(out, n, "[plugin]\napi = %d\n%s = \"%s\"\n", api, plat(), rel);
@@ -425,6 +495,7 @@ int main(int argc, char **argv)
         printf("cannot redirect stderr\n");
         return 2;
     }
+    atexit(check_shutdown);         /* before any plugin: it runs after their on_shutdown */
     set_env("TAKEDAWN_MOD_LIST", NULL);
 
     /* s0: installed mods without native code: nothing is said, nothing runs */
@@ -523,7 +594,7 @@ int main(int argc, char **argv)
           t ? t : "(no marker)");
     {
         char want[32];
-        snprintf(want, sizeof want, "info=%u\n", (unsigned)sizeof(td_plugin_info));
+        snprintf(want, sizeof want, "info=%u ", (unsigned)sizeof(td_plugin_info));
         CHECK(t && strstr(t, want), "F3: init is told the room it has in info (%s): %s", want, t ? t : "(no marker)");
     }
     free(t);
@@ -558,6 +629,26 @@ int main(int argc, char **argv)
     CHECK(index_of("t.device") < 0, "F6: a device name as the module makes the mod invalid");
     CHECK(state("example.hello-plugin", why) == BO3_PLUGIN_RUNNING, "the example plugin runs: %s", why);
     CHECK(bo3_plugins_running() == 6, "running: good, stray, order a, order b, biginfo, hello (%d)", bo3_plugins_running());
+    /* every plugin ran its own module: the right kind, a copy of its own (init ran once in it) */
+    {
+        static const char *const want[][2] = {
+            { "init.t.good", "kind=good inits=1" }, { "init.t.stray", "kind=good inits=1" },
+            { "init.t.order.a", "kind=order_a inits=1" }, { "init.t.order.b", "kind=order_b inits=1" },
+            { "init.t.biginfo", "kind=biginfo inits=1" }, { "init.t.initfail", "kind=initfail inits=1" } };
+        char ca[64], cb[64];
+        for (size_t k = 0; k < sizeof want / sizeof want[0]; k++) {
+            t = marker(want[k][0]);
+            CHECK(t && strstr(t, want[k][1]), "identity: %s is from its own module (%s): %s", want[k][0], want[k][1], t ? t : "(none)");
+            free(t);
+        }
+        copy_of("init.t.good", ca, sizeof ca);
+        copy_of("init.t.stray", cb, sizeof cb);
+        CHECK(ca[0] && cb[0] && strcmp(ca, cb), "identity: two mods with the same module bytes ran two loaded copies (%s, %s)", ca, cb);
+        t = read_file(s_log);
+        CHECK(t && strstr(t, "[PLUGIN example.hello-plugin] hello from API 1") && strstr(t, "[PLUGIN t.good] test module started")
+              && strstr(t, "[PLUGIN t.order.b] test module started"), "identity: each plugin's lines carry its own mod id");
+        free(t);
+    }
     {
         char sha[65];
         bo3_plugins_state(index_of("t.notapproved"), NULL, 0, sha, sizeof sha);
@@ -568,6 +659,17 @@ int main(int argc, char **argv)
         bo3_plugins_init("again");
     CHECK(bo3_plugins_running() == 6 && state("t.order.a", why) == BO3_PLUGIN_RUNNING,
           "F4: 80 more starts: the same plugins, no table overrun (%d)", bo3_plugins_running());
+    {
+        int lines, first = all_first_inits("init.t.good", &lines);
+#if defined(_WIN32)
+        /* Windows loads the mod folder's file itself, and nothing is unloaded: a
+         * restart starts the module it already has (the same path, the same bytes). */
+        (void)first;
+        CHECK(lines == 81, "81 starts of t.good (%d lines)", lines);
+#else
+        CHECK(first && lines == 81, "identity: 81 starts of t.good, each in a newly loaded copy (%d lines)", lines);
+#endif
+    }
 
     /* s2: TAKEDAWN_PLUGINS=0 */
     scenario("s2");
@@ -661,6 +763,51 @@ int main(int argc, char **argv)
     }
 #endif
     replace_after_hold();
+
+    /* refused, before or at loading, again and again: nothing runs, and (Linux)
+     * no descriptor stays open */
+    scenario("fds");
+    {
+        declare(b, sizeof b, 1, "bin/good" EXT);
+        mod("good", "t.good", b, "marker", "bin/good" EXT, 0);             /* never approved */
+        mod("wrong", "t.wrong", b, "marker", "bin/good" EXT, 2);           /* approved for other bytes */
+        declare(b, sizeof b, 1, "bin/none" EXT);
+        mod("missing", "t.missing", b, NULL, NULL, 0);
+        {
+            char p[900], hex[65];                                           /* approved, but no library: dlopen fails */
+            declare(b, sizeof b, 1, "junk" EXT);
+            mod("junk", "t.junk", b, NULL, NULL, 0);
+            snprintf(p, sizeof p, "%s/mods/junk/junk" EXT, s_dir);
+            write_file(p, "not a library\n");
+            sha_of(p, hex);
+            approve("t.junk", hex);
+        }
+        start(NULL, NULL, 0);
+        CHECK(state("t.junk", why) != BO3_PLUGIN_RUNNING && strstr(why, "does not load"), "approved bytes that are no library: %s", why);
+#if defined(__linux__)
+        {
+            int before = open_fds(), after;
+            for (int k = 0; k < 40; k++)
+                bo3_plugins_init("fds");
+            after = open_fds();
+            CHECK(before == after, "no descriptor left open by 40 refused starts (%d -> %d)", before, after);
+        }
+#endif
+        CHECK(bo3_plugins_running() == 0 && !loaded("marker"), "nothing of the refused mods ran (%d)", bo3_plugins_running());
+    }
+
+    /* s7, the last start: two plugins that register on_shutdown (checked at exit) */
+    scenario("s7");
+    declare(b, sizeof b, 1, "bin/good" EXT);
+    mod("good", "t.good", b, "good", "bin/good" EXT, 1);
+    {
+        char b2[400];
+        declare(b2, sizeof b2, 1, "hello" EXT);
+        mod("hello", "example.hello-plugin", b2, "hello", "hello" EXT, 1);
+    }
+    start(NULL, NULL, 0);
+    CHECK(state("t.good", why) == BO3_PLUGIN_RUNNING && state("example.hello-plugin", why) == BO3_PLUGIN_RUNNING,
+          "s7: both run (%s)", why);
 
     fflush(stderr);
     t = read_file(s_log);

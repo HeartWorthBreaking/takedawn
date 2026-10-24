@@ -9,8 +9,11 @@
  *
  *   Linux: the copy is a memfd, sealed against every change (F_SEAL_WRITE,
  *   SHRINK, GROW, SEAL) before it is loaded, through /proc/self/fd/<n>. It
- *   has no name in any folder, and nobody can change it. A kernel or a
- *   sandbox without memfd or /proc refuses the plugin (the log says why).
+ *   has no name in any folder, and nobody can change it. A loaded copy's
+ *   memfd stays open for the process: dlopen hands back an object it has
+ *   already loaded for a name it has seen, so a closed and reused <n> would
+ *   give a later plugin an earlier one's library. A kernel or a sandbox
+ *   without memfd or /proc refuses the plugin (the log says why).
  *
  *   macOS: there is no memfd; the copy is a file in a folder of its own,
  *   made for it with mkdtemp in the user's own temporary folder (0700), left
@@ -99,12 +102,18 @@ static int memfd(const char *name, unsigned flags)
 
 struct bo3_plugin_file {
     int copy;                       /* the copy that is loaded: a sealed memfd (Linux), the private file (macOS) */
+    int loaded;                     /* Linux: the copy is loaded, its memfd stays open (below) */
     char load[4200];                /* what dlopen opens */
 #if defined(__APPLE__)
     char dir[1024];                 /* the private folder, removed with the copy */
     struct stat st;                 /* the copy's identity */
 #endif
 };
+
+/* Every library a plugin was given, so that dlopen handing back one it
+ * already gave (a name it took for an object it had loaded) is refused. */
+static void *s_libs[256];
+static int s_nlibs;
 
 int bo3_plugin_sys_supported(void)
 {
@@ -258,6 +267,16 @@ void *bo3_plugin_sys_load(bo3_plugin_file *f, char *why, size_t wn)
         snprintf(why, wn, "the module does not load (%s)", e ? e : "no reason given");
         return NULL;
     }
+    for (int i = 0; i < s_nlibs; i++)
+        if (s_libs[i] == lib) {
+            snprintf(why, wn, "the system handed back another plugin's library for this module (it loaded nothing new)");
+            return NULL;
+        }
+#if defined(__linux__)
+    /* dlopen takes a name it has loaded for that object again: a copy's
+     * memfd stays open, so its /proc/self/fd/<n> names no other copy. */
+    f->loaded = 1;
+#endif
 #if defined(__APPLE__)
     {
         struct stat now;
@@ -267,6 +286,8 @@ void *bo3_plugin_sys_load(bo3_plugin_file *f, char *why, size_t wn)
         }
     }
 #endif
+    if (s_nlibs < (int)(sizeof s_libs / sizeof s_libs[0]))
+        s_libs[s_nlibs++] = lib;
     return lib;
 }
 
@@ -274,8 +295,8 @@ void bo3_plugin_sys_release(bo3_plugin_file *f)
 {
     if (!f)
         return;
-    if (f->copy >= 0)
-        close(f->copy);                 /* Linux: a loaded copy stays mapped */
+    if (f->copy >= 0 && !f->loaded)
+        close(f->copy);                 /* a loaded memfd stays open for the process (bo3_plugin_sys_load) */
 #if defined(__APPLE__)
     if (f->dir[0]) {
         unlink(f->load);                /* a loaded copy stays mapped */
