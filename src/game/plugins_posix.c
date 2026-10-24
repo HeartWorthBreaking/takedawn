@@ -272,6 +272,8 @@ void *bo3_plugin_sys_load(bo3_plugin_file *f, char *why, size_t wn)
             snprintf(why, wn, "the system handed back another plugin's library for this module (it loaded nothing new)");
             return NULL;
         }
+    if (s_nlibs < (int)(sizeof s_libs / sizeof s_libs[0]))
+        s_libs[s_nlibs++] = lib;            /* every library handed out, kept or refused below: never given twice */
 #if defined(__linux__)
     /* dlopen takes a name it has loaded for that object again: a copy's
      * memfd stays open, so its /proc/self/fd/<n> names no other copy. */
@@ -286,8 +288,6 @@ void *bo3_plugin_sys_load(bo3_plugin_file *f, char *why, size_t wn)
         }
     }
 #endif
-    if (s_nlibs < (int)(sizeof s_libs / sizeof s_libs[0]))
-        s_libs[s_nlibs++] = lib;
     return lib;
 }
 

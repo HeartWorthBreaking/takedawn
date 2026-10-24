@@ -14,14 +14,18 @@ int bo3_plugin_sys_supported(void);
 
 /* The module at path (a full path plugins.c has checked), opened and held
  * until bo3_plugin_sys_release: on Windows nobody can write, replace or
- * delete it meanwhile; elsewhere the file is checked again after loading.
+ * delete it meanwhile; elsewhere it is copied while it is hashed and the
+ * copy is loaded (Linux: a sealed memfd; macOS: a private file, checked
+ * again after loading).
  * Its SHA-256 into sha. NULL, with why, when it cannot be read or is not a
  * regular file. */
 typedef struct bo3_plugin_file bo3_plugin_file;
 bo3_plugin_file *bo3_plugin_sys_hold(const char *path, uint8_t sha[32], char *why, size_t wn);
 /* Load the held module: the system runs the library's own start-up code here.
- * NULL, with why, when it does not load, or when what was loaded is not the
- * file that was hashed (it stays loaded then). Never unloaded. */
+ * NULL, with why, when it does not load, when what was loaded is not the
+ * file that was hashed (it stays loaded then), or when the system hands back
+ * a library it already gave another plugin (nothing new was loaded). Never
+ * unloaded. */
 void *bo3_plugin_sys_load(bo3_plugin_file *f, char *why, size_t wn);
 void bo3_plugin_sys_release(bo3_plugin_file *f);
 /* An export of a loaded module, or NULL. */
